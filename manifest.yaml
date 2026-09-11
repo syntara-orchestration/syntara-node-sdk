@@ -1,0 +1,159 @@
+# Syntara Node SDK - Canonical Manifest Template
+# This is the root template showing all available fields following Kubernetes CRD conventions.
+# Copy this template when creating new nodes.
+
+apiVersion: syntara.io/v1alpha1
+kind: NodeType
+
+metadata:
+  # Internal node identifier (snake_case) - used as primary key
+  name: example_node
+
+  # Human-readable name displayed in UI palette and canvas
+  displayName: Example Node
+
+  # Semantic version (MAJOR.MINOR.PATCH)
+  version: 1.0.0
+
+  # Icon identifier for React Flow palette (see NodePaletteIcon in common-definitions.json)
+  # Options: globe, database, script, webhook, loop, condition, git, cloud, mail, etc.
+  icon: cube
+
+  # Multi-line description (supports markdown)
+  description: |
+    Brief description of what this node does.
+    Explain the primary use case and key capabilities.
+
+  # Searchable tags for filtering in the node palette
+  tags:
+    - category:action
+    - integration:rest-api
+    - network:external
+
+  # Author and licensing information
+  author: Your Name or Organization
+  license: Apache-2.0
+
+  # Optional: Link to detailed documentation
+  documentationUrl: https://docs.syntara.io/nodes/example-node
+
+spec:
+  # Node category: action | task | workflow | trigger
+  category: action
+
+  # Execution configuration
+  execution:
+    # Type: container (isolated pod) | in_process (built-in activity)
+    type: container
+
+    # Container image reference (required for type: container)
+    image: registry.syntara.io/nodes/example-node:1.0.0
+
+  # Declared capability and credential requirements (inspectable before execution)
+  declaredRequirements:
+    capabilities:
+      - network-egress           # Can make outbound HTTP requests
+      - readonly-root-filesystem # Runs with read-only root FS
+      # Other options: script-execution, tmpfs-mount, privileged-execution
+
+    # Allowed credential types (zero-trust UUID references only)
+    credentialTypes:
+      - api_key
+      - bearer_token
+      # Other options: basic_auth, oauth2, ssh_key, custom
+
+    # Minimum platform version
+    platformVersion: ">=3.0.0"
+
+  # Scheduling and network controls
+  schedulingControls:
+    # Network connectivity requirements for informed pod placement
+    connectivity_requirements:
+      - host: api.example.com
+        ports:
+          - port: 443
+            protocol: TCP
+
+    # Affinity labels for pod scheduling (optional)
+    affinity_labels:
+      workload_type: integration
+      region: us-east-1
+
+  # Input schema (JSON Schema Draft-07)
+  inputs:
+    type: object
+    properties:
+      # Example: Simple string input
+      url:
+        type: string
+        description: Target URL
+        minLength: 10
+        maxLength: 2048
+        examples:
+          - https://api.example.com/v1/resource
+
+      # Example: Enum with default
+      method:
+        type: string
+        description: HTTP method
+        enum: [GET, POST, PUT, DELETE, PATCH]
+        default: GET
+
+      # Example: Dynamic dictionary (patternProperties)
+      headers:
+        type: object
+        description: HTTP headers
+        patternProperties:
+          "^[A-Za-z0-9-]+$":
+            type: string
+        default: {}
+
+      # Example: oneOf union for polymorphic types
+      body:
+        description: Request body (JSON object or raw string)
+        oneOf:
+          - type: object
+            description: JSON object body
+          - type: string
+            description: Raw string body
+
+      # Example: Array of specific type
+      tags:
+        type: array
+        description: Resource tags
+        items:
+          type: string
+        default: []
+
+      # Example: Credential reference (zero-trust UUID only)
+      credential_id:
+        type: string
+        description: Credential UUID reference
+        format: uuid
+        examples:
+          - 550e8400-e29b-41d4-a716-446655440000
+
+    required:
+      - url
+
+  # Output schema - must reference StandardOutputWrapper
+  outputs:
+    allOf:
+      - $ref: "schemas/common-definitions.json#/definitions/StandardOutputWrapper"
+
+  # Resource limits for container execution (Kubernetes format)
+  resourceRequirements:
+    limits:
+      cpu: 500m      # 0.5 CPU cores
+      memory: 256Mi  # 256 megabytes
+    requests:
+      cpu: 100m      # 0.1 CPU cores
+      memory: 128Mi  # 128 megabytes
+
+  # Execution timeout in seconds (default: 300)
+  executionTimeout: 60
+
+  # Workload classification for credential access control
+  # action: deterministic, scripted - can access infrastructure credentials
+  # agentic: LLM-driven - blocked from infrastructure credentials (prompt injection mitigation)
+  workloadClassification: action
