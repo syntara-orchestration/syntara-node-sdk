@@ -9,11 +9,11 @@ A schema-driven framework for authoring, packaging, and registering custom autom
 ## Features
 
 - **🎯 Type-Safe Authoring** — Author nodes in human-friendly YAML with JSON Schema validation (Draft-07)
-- **🔒 Zero-Trust Security** — Credential references only; secrets injected at runtime via ephemeral tmpfs mounts
+- **🔒 Zero-Trust Security** — Credential references only; sensitive values are separated into the transient stdin `credentials` map, with runtime injection and persistence safeguards owned by the execution plane
 - **📦 Four-Category Taxonomy** — `action` (integrations), `task` (compute), `workflow` (control flow), `trigger` (events)
 - **⚡ Fast Canvas Rendering** — Compiled node definitions enable <500ms dynamic form rendering
 - **🔌 Kubernetes-Native** — Follows K8s CRD conventions (`apiVersion`, `kind`, `metadata`, `spec`)
-- **🛡️ Declarative Permissions** — Static capability inspection before container execution
+- **🛡️ Declarative Permissions** — Static capability inspection before execution-plane dispatch
 - **🔄 Backwards Compatible** — Immutable output envelope (`StandardOutputWrapper`) ensures stable template expressions
 
 ## Quick Start
@@ -27,6 +27,29 @@ pip install -e ./sdk-python
 # Or install from the repository root
 pip install -e .
 ```
+
+### Scaffold and Package Nodes
+
+Use the CLI to create a shared-runner script node or a dedicated-image node:
+
+```bash
+syntara-cli init normalize_payload --tier 2  # shared-runner script node
+syntara-cli init customer_lookup --tier 3 --image quay.io/example/customer-lookup:1.0.0  # dedicated container extension
+syntara-cli build customer_lookup/manifest.yaml --output customer-lookup-oci
+
+# Local prototype: publish to OCI, then register in Syntara automatically
+syntara-cli push customer_lookup/manifest.yaml \
+  --registry localhost:5000/syntara/nodes/customer-lookup:1.0.0
+```
+
+Dedicated container-extension builds emit a standard OCI image manifest with artifact type
+`application/vnd.syntara.node.manifest.v1+yaml` and the validated YAML manifest
+in the `org.syntara.node.manifest` annotation.
+
+`push` publishes the OCI metadata and then calls
+`POST /api/v1/node-types` to add the node to Syntara's available-node catalog.
+Use `--skip-register` for registry-only publishing or `--api-url` to target a
+different Syntara instance.
 
 ### Create Your First Node
 
@@ -103,32 +126,20 @@ spec:
 
 ### Validate & Test
 
-**Validate manifest against schema:**
+**Validate manifest using SDK:**
 
 ```python
-# In Python
-from pathlib import Path
-import yaml
-import json
-from jsonschema import Draft7Validator, RefResolver
+from syntara_sdk.compiler import compile_manifest, validate_manifest
 
-# Load manifest
-with open("nodes/my-http-node/manifest.yaml") as f:
-    manifest = yaml.safe_load(f)
-
-# Load schema
-with open("schemas/common-definitions.json") as f:
-    schema = json.load(f)
-
-# Validate
-resolver = RefResolver.from_schema(schema)
-validator = Draft7Validator(schema["definitions"]["NodeTypeManifest"], resolver=resolver)
-errors = list(validator.iter_errors(manifest))
+# Validate only
+manifest = {"apiVersion": "syntara.io/v1alpha1", ...}
+errors = validate_manifest(manifest)
 if errors:
-    for error in errors:
-        print(f"Validation error: {error.message}")
-else:
-    print("✓ Manifest is valid")
+    print("Validation errors:", errors)
+
+# Compile (validates + prepares for database)
+descriptor = compile_manifest("nodes/my-http-node/manifest.yaml")
+print(f"✓ Compiled: {descriptor['metadata']['name']}")
 ```
 
 **Test your node locally:**
@@ -142,23 +153,22 @@ PYTHONPATH="nodes/my-http-node:$PYTHONPATH" \
   --inputs-file test_inputs.json
 ```
 
-### Publish to Registry
+### Publish and Register
 
-**Manual registration via REST API:**
+The OCI registry is the artifact source, and Syntara PostgreSQL is hydrated by
+the registration API. The CLI publishes the OCI manifest and then registers the
+image with Syntara automatically:
 
 ```bash
-# Post the manifest directly (YAML or JSON)
-curl -X POST http://localhost:8000/api/v1/node-types \
-  -H "Content-Type: application/yaml" \
-  --data-binary @nodes/my-http-node/manifest.yaml
-
-# Or compile to JSON first
-python -c "import yaml, json, sys; print(json.dumps(yaml.safe_load(open('nodes/my-http-node/manifest.yaml'))))" > node-definition.json
-
-curl -X POST http://localhost:8000/api/v1/node-types \
-  -H "Content-Type: application/json" \
-  -d @node-definition.json
+syntara-cli push nodes/http-request/manifest.yaml \
+  --registry localhost:5000/syntara/nodes/http-request:1.0.0 \
+  --api-url http://localhost:5173
 ```
+
+Use `--skip-register` when publishing to a registry without making the node
+available in Syntara yet. An administrator or deployment process can then
+register the existing image later by posting its `image_ref` to
+`POST /api/v1/node-types`.
 
 ## Architecture
 
@@ -190,7 +200,7 @@ graph LR
 ### Execution Types
 
 - **`in_process`** — Runs as a built-in workflow activity inside the orchestrator (zero pod overhead)
-- **`container`** — Runs in an isolated worker pod with strict resource and network isolation
+- **`container`** — Hands the node contract to the execution plane for isolated execution
 
 ## Examples
 
@@ -206,8 +216,7 @@ The SDK includes reference implementations for each node category:
 
 ```bash
 # Registry platform tests (9 tests)
-cd tests/registry
-uv run test_postgres_registry.py
+uv run pytest tests/registry/test_postgres_registry.py
 
 # HTTP Request node unit tests (12 tests)
 PYTHONPATH="nodes/http-request:$PYTHONPATH" \
@@ -255,7 +264,7 @@ See [docs/architecture.md](docs/architecture.md) for complete API documentation.
 
 ### Zero-Trust Credentials
 
-Nodes **never** store plaintext secrets. Instead, they reference credentials by UUID:
+Node manifests and compiled descriptors store only abstract credential references, never credential values. Credential references are passed to the execution plane so resolved values can be carried separately from plain inputs in the transient stdin payload:
 
 ```yaml
 spec:
@@ -265,10 +274,7 @@ spec:
       credential_mount_path: /tmp/api-key
 ```
 
-At runtime, the execution plane:
-1. Resolves the `credential_id` from the encrypted vault
-2. Injects it into a RAM-backed tmpfs mount
-3. Deletes it when the container exits
+At dispatch time, the SDK contract separates sensitive input values from plain `inputs` and places the resolved values in the `credentials` map of the single JSON stdin invocation. The execution plane owns how those credentials are injected, logged, scrubbed, and persisted.
 
 ### Declarative Permissions
 
@@ -291,7 +297,7 @@ spec:
             protocol: TCP
 ```
 
-Administrators can audit these requirements **before** any container runs. The execution plane compiles them into Kubernetes NetworkPolicies and Security Context Constraints.
+Administrators can audit these requirements **before** execution-plane dispatch. The execution plane consumes the declarations together with registration policy to apply its runtime controls.
 
 ### Workload Classification
 
@@ -335,8 +341,7 @@ pip install pytest pytest-mock respx httpx
 export SYNTARA_TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/syntara_test
 
 # Run tests
-cd tests/registry
-uv run test_postgres_registry.py
+uv run pytest tests/registry/test_postgres_registry.py
 
 # Or run with pytest
 PYTHONPATH="nodes/http-request:$PYTHONPATH" \

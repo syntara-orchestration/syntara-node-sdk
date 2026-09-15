@@ -30,14 +30,14 @@ spec:
   declaredRequirements:
     capabilities:
       - network-egress             # Required for external HTTP requests
-      - readonly-root-filesystem   # Pod root FS is immutable; nothing writes to disk
-      - tmpfs-mount                # RAM-backed scratch + injected credential files
+      - readonly-root-filesystem   # Requires read-only root filesystem semantics
+      - tmpfs-mount                # Requires an ephemeral filesystem capability
     credentialTypes:
       - API Key
       - Bearer Token
     platformVersion: ">=3.0.0"
 
-  # Pod placement and network controls
+  # Developer-declared placement and connectivity requirements
   schedulingControls:
     affinity_labels: []
     connectivity_requirements:
@@ -169,13 +169,13 @@ spec:
       - url
       - method
 
-  # Credential injection for authenticated API calls.
+  # Credential references for authenticated API calls.
   # Zero-trust: the manifest stores only abstract UUID references (credential_id).
-  # The execution plane resolves each credential at runtime and injects it via the
-  # requested mount type — env var, RAM-backed tmpfs_file, or HTTP header — before
-  # the container starts. A node may declare multiple simultaneous references here
-  # (each a CredentialReference); the shape is defined once, canonically, in
-  # common-definitions.json.
+  # The SDK includes these references so the execution plane can resolve the
+  # credentials and place decrypted values in the separate stdin credentials
+  # map. A node may declare multiple simultaneous references here (each a
+  # CredentialReference); the shape is defined once, canonically, in
+  # common-definitions.json. Runtime injection is execution-plane-owned.
   credential_references: []
 
   # Output schema - references AND extends StandardOutputWrapper from

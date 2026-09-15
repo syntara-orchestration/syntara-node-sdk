@@ -41,6 +41,9 @@ spec:
   # Node category: action | task | workflow | trigger
   category: action
 
+  # Sandbox, egress, and worker-pool policy are intentionally omitted here.
+  # Administrators provide those controls in POST /api/v1/node-types.
+
   # Execution configuration
   execution:
     # Type: container (isolated pod) | in_process (built-in activity)
@@ -49,7 +52,14 @@ spec:
     # Container image reference (required for type: container)
     image: registry.syntara.io/nodes/example-node:1.0.0
 
-  # Declared capability and credential requirements (inspectable before execution)
+    # Optional process command. Use null for in_process nodes.
+    entrypoint: null
+
+  # Developer-declared extension requirements. These describe the capabilities
+  # the extension needs and are inspected by administrators before execution.
+  # Syntara binds them to infrastructure policy at registration time through
+  # sandbox_required, egress_policy, and worker_pool_selector.
+
   declaredRequirements:
     capabilities:
       - network-egress           # Can make outbound HTTP requests
@@ -65,19 +75,21 @@ spec:
     # Minimum platform version
     platformVersion: ">=3.0.0"
 
-  # Scheduling and network controls
+  # Developer-declared scheduling and connectivity requirements
   schedulingControls:
-    # Network connectivity requirements for informed pod placement
+    # Network connectivity requirements for administrative review and
+    # execution-plane policy matching
     connectivity_requirements:
       - host: api.example.com
         ports:
           - port: 443
             protocol: TCP
 
-    # Affinity labels for pod scheduling (optional)
+    # Affinity labels for developer-declared placement requirements
+    # Registration policy is supplied separately through worker_pool_selector.
     affinity_labels:
-      workload_type: integration
-      region: us-east-1
+      - workload_type=integration
+      - region=us-east-1
 
   # Input schema (JSON Schema Draft-07)
   inputs:
@@ -91,6 +103,14 @@ spec:
         maxLength: 2048
         examples:
           - https://api.example.com/v1/resource
+
+      # Sensitive values must be explicitly marked so the execution plane can
+      # split them from plain inputs into the stdin credentials map and apply
+      # its logging and persistence guarantees using the same schema flag.
+      api_key:
+        type: string
+        description: API key supplied to the node at runtime
+        secret: true
 
       # Example: Enum with default
       method:
@@ -130,6 +150,7 @@ spec:
         type: string
         description: Credential UUID reference
         format: uuid
+        secret: false
         examples:
           - 550e8400-e29b-41d4-a716-446655440000
 
