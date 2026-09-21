@@ -194,8 +194,8 @@
               "type": "object",
               "description": "Output schema defining what the node returns."
             },
-            "credential_references": {
-              "$ref": "#/definitions/CredentialReferenceList"
+            "credentialSpecification": {
+              "$ref": "#/definitions/CredentialSpecification"
             },
             "resourceRequirements": {
               "$ref": "#/definitions/ResourceRequirements"
@@ -235,9 +235,6 @@
                 }
               },
               "additionalProperties": false
-            },
-            "workloadClassification": {
-              "$ref": "#/definitions/WorkloadClassification"
             }
           },
           "required": ["category", "execution", "inputs", "outputs"],
@@ -525,6 +522,22 @@
       "description": "Optional glyph shown beside the node in the React Flow visual builder's drag-and-drop palette drawer, interpreted as a PatternFly / Font Awesome icon name. Authored in the manifest and carried through compilation into the node-definition.json descriptor so the palette can render it without a frontend deployment. When omitted, the UI falls back to a per-category default icon.",
       "pattern": "^[a-z0-9-]+$",
       "examples": ["globe", "terminal", "bolt", "project-diagram"]
+    },
+
+    "CredentialSpecification": {
+      "type": "object",
+      "title": "Credential Specification",
+      "description": "Node-level credential access specification. Workload classification is evaluated before dispatch to establish which credential classes the node may request; credential references contain only UUIDs and presentation hints.",
+      "properties": {
+        "workloadClassification": {
+          "$ref": "#/definitions/WorkloadClassification"
+        },
+        "credential_references": {
+          "$ref": "#/definitions/CredentialReferenceList"
+        }
+      },
+      "required": ["workloadClassification"],
+      "additionalProperties": false
     },
 
     "CredentialReference": {

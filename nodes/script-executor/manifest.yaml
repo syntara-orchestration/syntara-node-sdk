@@ -70,4 +70,5 @@ spec:
       cpu: 250m
       memory: 256Mi
   executionTimeout: 300
-  workloadClassification: action
+  credentialSpecification:
+    workloadClassification: action
