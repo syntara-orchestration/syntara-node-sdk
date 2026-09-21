@@ -268,10 +268,12 @@ Node manifests and compiled descriptors store only abstract credential reference
 
 ```yaml
 spec:
-  credential_references:
-    - credential_id: 550e8400-e29b-41d4-a716-446655440000
-      credential_mount_type: tmpfs_file
-      credential_mount_path: /tmp/api-key
+  credentialSpecification:
+    workloadClassification: action
+    credential_references:
+      - credential_id: 550e8400-e29b-41d4-a716-446655440000
+        credential_mount_type: tmpfs_file
+        credential_mount_path: /tmp/api-key
 ```
 
 At dispatch time, the SDK contract separates sensitive input values from plain `inputs` and places the resolved values in the `credentials` map of the single JSON stdin invocation. The execution plane owns how those credentials are injected, logged, scrubbed, and persisted.
