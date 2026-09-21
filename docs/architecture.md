@@ -64,7 +64,7 @@ The platform recognizes exactly four categories, defined canonically as `NodeCat
 |----------|---------|--------------------------|----------|
 | `action` | Domain and external API integrations | `container` | `http_request`, `github_issue` |
 | `task` | Atomic compute and script executors | `container` | `script_executor` (Python 3.12, Bash 5.2) |
-| `workflow` | In-memory control-plane logic | `in_process` | `condition`, `loop`, `switch` |
+| `workflow` | In-memory control-plane logic and composition | `in_process` | `condition`, `loop`, `switch`, `subworkflow_call` |
 | `trigger` | Event entry points | `in_process` | Webhook, Schedule, Kafka Subscribe, Manual, `subworkflow_trigger` |
 
 ### Execution Type
@@ -77,18 +77,24 @@ The platform recognizes exactly four categories, defined canonically as `NodeCat
 
 The SDK defines one language-agnostic node contract for two execution placements: control-plane activities and containerized workloads run by the Execution Plane. Both placements use the same metadata, input validation, invocation, and standard result semantics; only the deployment and runtime boundary differs. `manifest.yaml` describes the contract and execution placement, while implementation code is deployed separately.
 
-- **`in_process`** — executed inline as a built-in workflow activity inside the orchestrator process (Temporal/Control Plane). Reserved for control-plane workflow logic (`condition`, `loop`, `switch`), subworkflow reference-mode calls, and event triggers (`webhook`, `schedule`, `subworkflow_trigger`, `kafka_subscribe`). These nodes have zero container/pod overhead and bypass the Execution Plane.
+- **`in_process`** — executed inline as a built-in workflow activity inside the orchestrator process (Temporal/Control Plane). Reserved for control-plane workflow logic (`condition`, `loop`, `switch`), the parent-side subworkflow call, and event triggers (`webhook`, `schedule`, `subworkflow_trigger`, `kafka_subscribe`). These nodes have zero container/pod overhead and bypass the Execution Plane.
 - **`container`** — handed to the Execution Plane with the node's descriptor, selection metadata, registration controls, and abstract task invocation. Dedicated OCI container extensions use custom vendor images containing application logic. Shared-runner task nodes use zero-build script execution (Python, Bash, PowerShell, or a shebang-selected language) with script code injected into platform-managed runner containers through direct descriptor registration.
 
-### The `subworkflow_trigger` Node
-
-`subworkflow_trigger` is a dedicated, first-class node type that lets a parent workflow invoke a child workflow as a composable, reusable unit.
+##### The `subworkflow_trigger` Node (Child Entry & Eligibility)
 
 - **Category:** `trigger`
 - **Execution type:** `in_process`
 - **Reference implementation:** [nodes/subworkflow-trigger/](../nodes/subworkflow-trigger/)
 
-It runs in-process: it accepts the **parent workflow context**, an **ingress payload schema** (the parent↔child contract), and the **caller execution ID**, then hands control to the referenced child workflow. It returns a `StandardOutputWrapper` whose `Result` carries the child workflow's terminal output, so downstream parent nodes can reference it via stable template expressions (e.g., `${call_child.Result.summary}`).
+This is the dedicated child-side entry trigger for Reference-mode subworkflow invocation by a parent workflow. It defines the child workflow's required input-variable schema and output contract. A workflow is eligible for Reference-mode invocation only when it contains an active `subworkflow_trigger`.
+
+##### The Subworkflow Call Node (Parent Invoker & Composition)
+
+- **Category:** `workflow`
+- **Execution type:** `in_process`
+- **Reference implementation:** [nodes/subworkflow-call/](../nodes/subworkflow-call/)
+
+This is the parent-side caller step. It selects a target child workflow by `workflow_id`, dynamically surfaces the child's required input variables as configurable form fields, re-validates child eligibility and the user's execute permission at runtime, pauses parent execution while invoking the child synchronously, and maps the child's terminal output into `StandardOutputWrapper.Result` for downstream template access (for example, `${call_child.Result.summary}`).
 
 ### `manifest.yaml` — The Developer Authoring Format
 
@@ -525,18 +531,18 @@ sequenceDiagram
 
 ### Diagram 4 — Declared Capabilities & Permission Manifest
 
-Static administrative inspection before execution-plane dispatch.
+Diagram 4 represents static **Platform Registration & Governance Inspection** performed by the backend during node registration and dispatch preparation. It is a policy and metadata flow; it is not code executed inside the SDK runtime. The node manifest supplies requirements and credential classification, while the platform evaluates those declarations against administrator-controlled registration policy before allowing dispatch.
 
 ```mermaid
 graph TB
     subgraph MANIFEST["Declared Permission Manifest (static)"]
-        WC["credentialSpecification.workloadClassification<br/>action | agentic"]
+        WC["Credential Specification<br/>workloadClassification<br/>spec.credentials.classification<br/>action | agentic"]
         REQS["manifest.declaredRequirements<br/>capabilities"]
         CONN["registration.egress_policy<br/>none | restricted | unrestricted"]
         CAPS["registration.sandbox_required<br/>+ worker_pool_selector"]
     end
 
-    subgraph AUDIT["Static Administrative Inspection"]
+    subgraph AUDIT["Backend Registration & Governance Check"]
         REVIEW["Security review /<br/>policy gate"]
         DECISION{"Approve for<br/>execution?"}
     end
@@ -546,20 +552,18 @@ graph TB
     CONN --> REVIEW
     CAPS --> REVIEW
     REVIEW --> DECISION
-    DECISION -->|Approved| ALLOW["Eligible for<br/>container execution"]
-    DECISION -->|Rejected| BLOCK["Blocked before<br/>execution-plane dispatch"]
+    DECISION -->|Approved| ALLOW["Eligible for<br/>dispatch"]
+    DECISION -->|Rejected| BLOCK["Blocked before<br/>dispatch"]
 ```
 
 Key inspection points, all resolvable without executing the node:
 
-- **`credentialSpecification.workloadClassification`** (`action` | `agentic`) — gates which credential classes the node may access; `agentic` nodes are blocked from infrastructure credentials
+- **Credential Specification classification** (`action` | `agentic`) — `workloadClassification` is defined inside the node's credential specification in the node's manifest (`spec.credentials.classification` in the platform permission model; stored by the SDK descriptor as `spec.credentialSpecification.workloadClassification`). It gates which credential classes the node may access; `agentic` nodes are blocked from infrastructure credentials.
 - **`egress_policy`** — the administrator-selected egress mode supplied to the execution plane for runtime policy enforcement
 - **`sandbox_required`** — the administrative requirement supplied to the execution plane for sandbox enforcement
 - **`worker_pool_selector`** — affinity labels supplied to the execution plane for eligible worker selection
 
 ### Credential Handling
-
-Workload classification (`action` vs. `agentic`) is declared as part of the node's credential specification to establish runtime credential access boundaries before dispatch.
 
 Secret handling has the following required order:
 
@@ -658,14 +662,18 @@ Every compiled `node-definition.json` follows the K8s CRD structure:
 
 The SDK includes reference implementations demonstrating each node category:
 
-| Example | Category | Execution Type | Location |
-|---------|----------|----------------|----------|
-| `http_request` | action | container | [nodes/http-request/](../nodes/http-request/) |
-| `script_executor` | task | container | [nodes/script-executor/](../nodes/script-executor/) |
-| `subworkflow_trigger` | trigger | in_process | [nodes/subworkflow-trigger/](../nodes/subworkflow-trigger/) |
+| Example | Category | Execution Type | Location | Purpose |
+|---------|----------|----------------|----------|---------|
+| `http_request` | action | container | [nodes/http-request/](../nodes/http-request/) | External API integration |
+| `script_executor` | task | container | [nodes/script-executor/](../nodes/script-executor/) | Zero-build script runner |
+| `subworkflow_call` | workflow | in_process | [nodes/subworkflow-call/](../nodes/subworkflow-call/) | Parent-side child workflow invoker |
+| `subworkflow_trigger` | trigger | in_process | [nodes/subworkflow-trigger/](../nodes/subworkflow-trigger/) | Child-side entry & eligibility trigger |
 
-Each example includes:
-- Complete `manifest.yaml` following K8s CRD structure
-- Compiled `node-definition.json` artifact
-- Test suite demonstrating validation and registration
-- README with usage instructions
+Each example documents:
+- A complete `manifest.yaml` following K8s CRD structure
+- The descriptor fields used for registration and canvas metadata
+- A README with the node's contract and execution boundary
+
+Where an example has executable SDK code, its test suite demonstrates
+validation and registration. Platform-owned in-process composition nodes may
+provide a descriptor and contract reference without a local runner.

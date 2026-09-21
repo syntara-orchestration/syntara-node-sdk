@@ -236,7 +236,7 @@ class WorkflowNode(BaseNode[TInput, TOutput]):
     - Implement control flow (loops, conditions, switches)
     - No container overhead
 
-    Examples: loop, condition, switch, converge
+    Examples: loop, condition, switch, converge, subworkflow_call
     """
 
     pass
@@ -248,7 +248,7 @@ class TriggerNode(BaseNode[TInput, TOutput]):
     Trigger nodes:
     - Execute in-process (execution_type: in_process)
     - Start workflows in response to events
-    - Includes special subworkflow_trigger for composable workflows
+    - Includes child-side subworkflow_trigger for Reference-mode eligibility
 
     Examples: webhook, schedule, manual, subworkflow_trigger
     """

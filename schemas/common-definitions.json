@@ -30,14 +30,14 @@
               "pattern": "^[a-z][a-z0-9_]*$",
               "minLength": 1,
               "maxLength": 64,
-              "examples": ["http_request", "script_executor", "subworkflow_trigger"]
+              "examples": ["http_request", "script_executor", "subworkflow_call", "subworkflow_trigger"]
             },
             "displayName": {
               "type": "string",
               "description": "Human-readable node name displayed in the UI palette and canvas.",
               "minLength": 1,
               "maxLength": 128,
-              "examples": ["HTTP Request", "Script Executor", "Subworkflow Trigger"]
+              "examples": ["HTTP Request", "Script Executor", "Subworkflow Call", "Subworkflow Trigger"]
             },
             "version": {
               "type": "string",
@@ -495,7 +495,7 @@
     "NodeCategory": {
       "type": "string",
       "title": "Node Category",
-      "description": "Platform-wide node taxonomy classification. Categorizes nodes by their architectural role. Exactly four categories exist: 'action' (domain and API integrations), 'task' (atomic compute and script executors), 'workflow' (in-memory control-plane logic), and 'trigger' (event entry points, including the dedicated subworkflow_trigger). Used for UI organization, routing decisions, and capability validation.",
+      "description": "Platform-wide node taxonomy classification. Categorizes nodes by their architectural role. Exactly four categories exist: 'action' (domain and API integrations), 'task' (atomic compute and script executors), 'workflow' (in-memory control-plane logic, including the parent-side subworkflow_call), and 'trigger' (event entry points, including the child-side subworkflow_trigger). Used for UI organization, routing decisions, and capability validation.",
       "enum": ["action", "task", "workflow", "trigger"],
       "examples": ["action", "task", "workflow", "trigger"]
     },
@@ -503,7 +503,7 @@
     "NodeExecutionType": {
       "type": "string",
       "title": "Node Execution Type",
-      "description": "Determines where the platform dispatches the node. 'in_process': executed inline as a built-in activity within the orchestrator process — used for control-plane 'workflow' logic and 'trigger' nodes (including subworkflow_trigger) that require no isolated runtime. 'container': handed to the execution plane with the SDK descriptor and task-invocation contract. Worker lifecycle, provisioning, transport, and isolation implementation are outside this SDK schema.",
+      "description": "Determines where the platform dispatches the node. 'in_process': executed inline as a built-in activity within the orchestrator process — used for control-plane 'workflow' logic (including the parent-side subworkflow_call) and 'trigger' nodes (including the child-side subworkflow_trigger) that require no isolated runtime. 'container': handed to the execution plane with the SDK descriptor and task-invocation contract. Worker lifecycle, provisioning, transport, and isolation implementation are outside this SDK schema.",
       "enum": ["in_process", "container"],
       "examples": ["in_process", "container"]
     },
@@ -527,7 +527,7 @@
     "CredentialSpecification": {
       "type": "object",
       "title": "Credential Specification",
-      "description": "Node-level credential access specification. Workload classification is evaluated before dispatch to establish which credential classes the node may request; credential references contain only UUIDs and presentation hints.",
+      "description": "Node-level credential access specification. Workload classification is evaluated before dispatch to establish which credential classes the node may request; credential references contain only UUIDs and presentation hints. The platform permission model exposes the classification as spec.credentials.classification; this SDK descriptor stores it as workloadClassification.",
       "properties": {
         "workloadClassification": {
           "$ref": "#/definitions/WorkloadClassification"

@@ -194,8 +194,8 @@ graph LR
 |----------|---------|-----------|----------|
 | **action** | External API integrations | `container` | HTTP requests, GitHub issues, Slack messages |
 | **task** | Atomic compute operations | `container` | Script executor, data transformation |
-| **workflow** | Control flow logic | `in_process` | Loops, conditions, switches |
-| **trigger** | Event entry points | `in_process` | Webhooks, schedules, subworkflow calls |
+| **workflow** | Control flow and composition logic | `in_process` | Loops, conditions, switches, subworkflow calls |
+| **trigger** | Event entry points | `in_process` | Webhooks, schedules, subworkflow triggers |
 
 ### Execution Types
 
@@ -210,6 +210,7 @@ The SDK includes reference implementations for each node category:
 |---------|----------|----------|
 | **HTTP Request** | action | [nodes/http-request/](nodes/http-request/) |
 | **Script Executor** | task | [nodes/script-executor/](nodes/script-executor/) |
+| **Subworkflow Call** | workflow | [nodes/subworkflow-call/](nodes/subworkflow-call/) |
 | **Subworkflow Trigger** | trigger | [nodes/subworkflow-trigger/](nodes/subworkflow-trigger/) |
 
 ### Run Example Tests
@@ -312,7 +313,8 @@ Administrators can audit these requirements **before** execution-plane dispatch.
 - **[Common Definitions](schemas/common-definitions.json)** — Platform meta-schema (JSON Schema Draft-07)
 - **[HTTP Request Example](nodes/http-request/)** — Full `action` node reference implementation
 - **[Script Executor Example](nodes/script-executor/)** — Full `task` node reference implementation
-- **[Subworkflow Trigger Example](nodes/subworkflow-trigger/)** — Full `trigger` node reference implementation
+- **[Subworkflow Trigger Example](nodes/subworkflow-trigger/)** — Child-side `trigger` descriptor and Reference-mode eligibility contract
+- **[Subworkflow Call Example](nodes/subworkflow-call/)** — Parent-side `workflow` node descriptor for Reference-mode child invocation
 
 ## Development
 
