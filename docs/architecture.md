@@ -450,73 +450,129 @@ The handoff fields have distinct purposes:
 
 ## Control-Plane (`in_process`) Sequence Flows
 
-The `in_process` execution placement covers continuous event listeners and
-control-plane workflow activities. These paths do not create an execution-plane
-task or worker pod for each event. The `subworkflow_trigger` node is defined in
-the Core Architectural Standards section; the sequence below describes its
-runtime reference-mode behavior without duplicating that node contract.
+The `in_process` diagrams intentionally stop at the SDK-to-Control-Plane
+handoff. The Control Plane (Temporal Orchestrator) is shown as an implementation
+boundary: the SDK defines the descriptor, schemas, invocation metadata, and
+standard result contract, while the Control Plane registers activities or
+listeners and performs the internal execution. These paths do not create an
+execution-plane task or worker pod for each event.
 
-### Control-Plane Sequence 1 — Kafka Subscribe Trigger
+### General `in_process` SDK Handoff Contract
 
-An `in_process` Kafka subscribe trigger runs as a continuous listener on the
-Control Plane rather than as a per-step task execution. When the filter matches,
-the listener starts a new workflow instance and injects the raw or filtered
-event payload as the initial workflow context. Non-matching messages are
-ignored, and the trigger event is recorded in the activity log.
+Every in-process node uses the same SDK-facing handoff shape. The descriptor
+identifies the node category and execution placement; schema metadata describes
+the typed inputs and output model; and the abstract invocation carries the
+runtime values and context. The Control Plane owns how those fields are
+registered and executed inline and returns the immutable result envelope.
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    actor ExternalProducer as Kafka Broker / Topic
-    participant Listener as Control Plane Event Listener<br/>(Kafka Subscribe Trigger)
-    participant Filter as Filter Engine<br/>(CloudEvents / CEL / JSONPath)
-    participant Engine as Syntara Orchestrator<br/>(Temporal Engine)
-    participant DAG as New Workflow Instance
-
-    ExternalProducer->>Listener: Stream Kafka Message (Key, Headers, Body)
-    Listener->>Filter: Evaluate Filter Criteria
-    alt Filter Match
-        Filter-->>Listener: Match = True
-        Listener->>Engine: Trigger Workflow Execution
-        Engine->>DAG: Instantiate Workflow Context<br/>(Injects full Kafka message payload as initial context)
-        Listener->>Listener: Log Trigger Event (Trigger Activity Log)
-    else Filter Mismatch
-        Filter-->>Listener: Match = False (Ignore Message)
+graph LR
+    subgraph SDK["SDK / Developer Boundary"]
+        DESC["node-definition.json<br />descriptor (in_process)"]
     end
+
+    subgraph CONTRACT["Control Plane Handoff Contract →"]
+        C1["Descriptor & Registration<br />category + execution_type: in_process"]
+        C2["Abstract Task Invocation<br />inputs + decrypted credentials + context"]
+        C3["Schema Metadata<br />typed input constraints + output model"]
+    end
+
+    subgraph ENGINE["Control Plane (Orchestrator / Temporal)<br />[Implementation Boundary]"]
+        BB["Receive · Register Activity/Listener ·<br />Execute In-Memory Inline"]
+    end
+
+    subgraph RETURN["← StandardOutputWrapper"]
+        R1["Result"]
+        R2["StatusCode"]
+        R3["StatusMessage"]
+        R4["ErrorMessage"]
+    end
+
+    DESC --> C1 --> BB
+    DESC --> C2 --> BB
+    DESC --> C3 --> BB
+    BB --> R1
+    BB --> R2
+    BB --> R3
+    BB --> R4
 ```
 
-### Control-Plane Sequence 2 — Reference-Mode Subworkflow Call
+### Event Trigger SDK Handoff Contract
 
-Reference-mode subworkflow calls execute synchronously within the Control Plane
-memory space. The parent node inspects the child `subworkflow_trigger`
-manifest to surface input variables on the parent form, validates permissions
-and eligibility at runtime, pauses the parent execution while waiting for child
-completion, and maps the child's terminal outputs into the parent node's
-`StandardOutputWrapper.Result` map.
+Event triggers, including Kafka Subscribe and the child-side
+`subworkflow_trigger`, expose event-source binding, filter, and initial-context
+metadata through the SDK descriptor. The Control Plane owns the listener,
+filter evaluation, workflow instantiation, and trigger activity logging. For a
+`subworkflow_trigger`, the descriptor also establishes the child's
+Reference-mode eligibility; it is not the parent-side caller.
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant ParentWF as Parent Workflow Execution<br/>(Temporal Control Plane)
-    participant SubNode as Subworkflow Call Node<br/>(in_process)
-    participant Check as Auth & Eligibility Check
-    participant ChildWF as Child Workflow Execution<br/>(Subworkflow Trigger)
-    participant Downstream as Parent Downstream Nodes
-
-    ParentWF->>SubNode: Execute Subworkflow Step
-    SubNode->>Check: Validate Execute Permissions & Subworkflow Trigger Eligibility
-    alt Auth & Eligibility Pass
-        Check-->>SubNode: Validated
-        SubNode->>ChildWF: Invoke Child Execution (Reference Mode - Latest Published Version)
-        Note over ParentWF,ChildWF: Parent workflow execution PAUSES and waits
-        ChildWF->>ChildWF: Execute Child Workflow DAG
-        ChildWF-->>SubNode: Terminal Output Payload
-        SubNode->>ParentWF: Return StandardOutputWrapper.Result<br/>(Contains mapped child outputs)
-        ParentWF->>Downstream: Access child outputs via template expressions<br/>e.g., ${call_child.Result.summary}
-    else Auth or Eligibility Fail
-        Check-->>SubNode: Denied (Non-retryable failure)
-        SubNode-->>ParentWF: StandardOutputWrapper<br/>(StatusCode: Error, ErrorMessage: Denial Reason)
+graph LR
+    subgraph SDK["SDK / Trigger Definition"]
+        TRIG_DESC["Trigger Manifest / Descriptor<br />(category: trigger, in_process)"]
     end
+
+    subgraph HANDOFF["Handoff Contract →"]
+        H1["Listener Binding<br />topic / event source specification"]
+        H2["Filter Schema & Criteria<br />header, key, & payload match rules"]
+        H3["Context Injection Map<br />initial workflow payload structure"]
+    end
+
+    subgraph CONTROL["Control Plane Event Engine<br />[Implementation Boundary]"]
+        EXEC["Listen Stream · Evaluate Filter ·<br />Instantiate Workflow Instance"]
+    end
+
+    subgraph RETURN["← Event Context & Log"]
+        OUT["Trigger Activity Log Entry &<br />Initial Workflow Context Payload"]
+    end
+
+    TRIG_DESC --> H1 --> EXEC
+    TRIG_DESC --> H2 --> EXEC
+    TRIG_DESC --> H3 --> EXEC
+    EXEC --> OUT
+```
+
+### Synchronous Composition SDK Handoff Contract
+
+The `subworkflow_call` descriptor is the parent-side SDK contract for
+Reference-mode composition. It exposes the target identifier, the mapped wire
+payload, and the pre-execution contract that the platform must evaluate. The
+Control Plane owns child selection, eligibility and permission checks, parent
+pausing, child execution, and terminal-output collection; the SDK owns the
+descriptor and the stable result shape. The child-side `subworkflow_trigger`
+descriptor remains the source of the child's required input schema and
+Reference-mode eligibility.
+
+```mermaid
+graph LR
+    subgraph SDK["SDK / Call Node Definition"]
+        CALL_DESC["Call Node Descriptor<br />(category: workflow, in_process)"]
+    end
+
+    subgraph HANDOFF["Handoff Contract →"]
+        H1["Target Selection<br />workflow_id (Reference Mode)"]
+        H2["Mapped Input Payload<br />ingress_payload (JSON map)"]
+        H3["Pre-Execution Contract<br />eligibility & permission re-validation"]
+    end
+
+    subgraph CONTROL["Control Plane Activity<br />[Implementation Boundary]"]
+        EXEC["Validate Eligibility/Permissions ·<br />Pause Parent & Invoke Child Inline ·<br />Collect Terminal Child Outputs"]
+    end
+
+    subgraph RETURN["← StandardOutputWrapper"]
+        R1["Result (Child Terminal Outputs)"]
+        R2["StatusCode"]
+        R3["StatusMessage"]
+        R4["ErrorMessage"]
+    end
+
+    CALL_DESC --> H1 --> EXEC
+    CALL_DESC --> H2 --> EXEC
+    CALL_DESC --> H3 --> EXEC
+    EXEC --> R1
+    EXEC --> R2
+    EXEC --> R3
+    EXEC --> R4
 ```
 
 ## Policy & Security Enforcement
