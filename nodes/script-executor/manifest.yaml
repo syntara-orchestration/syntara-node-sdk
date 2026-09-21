@@ -1,0 +1,73 @@
+apiVersion: syntara.io/v1alpha1
+kind: NodeType
+
+metadata:
+  name: script_executor
+  displayName: Python Script Executor
+  version: 1.0.0
+  icon: terminal
+  description: Executes a Python or Bash script in the shared script runner.
+  tags:
+    - category:task
+    - execution:container
+  author: Syntara Team
+  license: Apache-2.0
+
+spec:
+  category: task
+  execution:
+    type: container
+    image: quay.io/syntara/script-python-executor:latest
+    entrypoint: python /workspace/main.py
+
+  declaredRequirements:
+    capabilities:
+      - script-execution
+      - tmpfs-mount
+    platformVersion: ">=3.0.0"
+
+  inputs:
+    type: object
+    properties:
+      script:
+        type: string
+        minLength: 1
+        maxLength: 1048576
+      language:
+        type: string
+        enum: [python3, bash]
+        default: python3
+      arguments:
+        oneOf:
+          - type: object
+            additionalProperties: true
+          - type: array
+            items:
+              type: string
+      environment_variables:
+        type: object
+        # Environment maps can carry tokens and passwords; treat the value map
+        # as sensitive unless a node-specific contract narrows it further.
+        secret: true
+        patternProperties:
+          "^[a-zA-Z_][a-zA-Z0-9_]*$":
+            type: string
+      working_directory:
+        type: string
+        pattern: "^/[a-zA-Z0-9/_.-]*$"
+        default: /workspace
+    required: [script, language]
+
+  outputs:
+    allOf:
+      - $ref: ../../schemas/common-definitions.json#/definitions/StandardOutputWrapper
+
+  resourceRequirements:
+    limits:
+      cpu: "1"
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  executionTimeout: 300
+  workloadClassification: action

@@ -1,0 +1,16 @@
+{
+  "url": "https://httpbin.org/get",
+  "method": "GET",
+  "headers": {
+    "User-Agent": "Syntara-SDK/0.1.0",
+    "Accept": "application/json"
+  },
+  "query_parameters": {
+    "test": "true",
+    "sdk_version": "0.1.0"
+  },
+  "timeout_seconds": 30,
+  "response_format": "auto",
+  "follow_redirects": true,
+  "verify_ssl": true
+}

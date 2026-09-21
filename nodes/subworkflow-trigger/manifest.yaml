@@ -1,0 +1,56 @@
+apiVersion: syntara.io/v1alpha1
+kind: NodeType
+
+metadata:
+  name: subworkflow_trigger
+  displayName: Sub-Workflow Trigger
+  version: 1.0.0
+  icon: bolt
+  description: Invokes a child workflow from the current workflow.
+  tags:
+    - category:trigger
+    - execution:in-process
+  author: Syntara Team
+  license: Apache-2.0
+
+spec:
+  category: trigger
+  execution:
+    type: in_process
+    image: null
+    entrypoint: null
+
+  inputs:
+    type: object
+    properties:
+      workflow_id:
+        type: string
+        format: uuid
+      workflow_name:
+        type: string
+        minLength: 1
+      ingress_payload:
+        type: object
+        additionalProperties: true
+      parent_execution_id:
+        type: string
+      max_depth:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 10
+      timeout_seconds:
+        type: integer
+        minimum: 0
+        maximum: 86400
+        default: 3600
+      propagate_context:
+        type: boolean
+        default: true
+    required: [workflow_id, workflow_name, ingress_payload]
+
+  outputs:
+    allOf:
+      - $ref: ../../schemas/common-definitions.json#/definitions/StandardOutputWrapper
+
+  executionTimeout: 3660
