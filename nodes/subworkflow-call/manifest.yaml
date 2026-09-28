@@ -2,20 +2,20 @@ apiVersion: syntara.io/v1alpha1
 kind: NodeType
 
 metadata:
-  name: subworkflow_trigger
-  displayName: Sub-Workflow Trigger
+  name: subworkflow_call
+  displayName: Subworkflow Call
   version: 1.0.0
-  icon: bolt
-  description: Child-side entry trigger that makes a workflow eligible for Reference-mode subworkflow invocation.
+  icon: project-diagram
+  description: Parent-side in-process caller for Reference-mode child workflow composition.
   tags:
-    - category:trigger
+    - category:workflow
     - execution:in-process
     - subworkflow:reference-mode
   author: Syntara Team
   license: Apache-2.0
 
 spec:
-  category: trigger
+  category: workflow
   execution:
     type: in_process
     image: null
@@ -24,11 +24,15 @@ spec:
   inputs:
     type: object
     properties:
+      workflow_id:
+        type: string
+        format: uuid
+        description: Target child workflow selected for Reference-mode invocation.
       input_variables:
         type: object
-        description: Required input variables declared by the child workflow and supplied by its parent caller.
+        description: Values for the required input variables exposed by the child trigger.
         additionalProperties: true
-    required: [input_variables]
+    required: [workflow_id]
 
   outputs:
     allOf:

@@ -174,7 +174,8 @@ spec:
   # Execution timeout in seconds (default: 300)
   executionTimeout: 60
 
-  # Workload classification for credential access control
+  # Credential access specification
   # action: deterministic, scripted - can access infrastructure credentials
   # agentic: LLM-driven - blocked from infrastructure credentials (prompt injection mitigation)
-  workloadClassification: action
+  credentialSpecification:
+    workloadClassification: action
