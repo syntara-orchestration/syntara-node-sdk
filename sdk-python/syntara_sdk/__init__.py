@@ -1,55 +1,35 @@
-"""Syntara Node SDK - Build type-safe automation nodes for Syntara workflows."""
+"""Syntara Step SDK - Runtime framework for implementing workflow steps."""
 
 __version__ = "0.1.0"
 
-from .compiler import (
-    compile_manifest,
-    compile_manifest_data,
-    load_manifest,
-    validate_manifest,
-)
-from .context import ExecutionContext
-from .credentials import (
+from syntara_sdk.context import ExecutionContext
+from syntara_sdk.credentials import (
     ApiKeyCredential,
     BasicAuthCredential,
     BearerTokenCredential,
     CredentialMountType,
     CredentialReference,
 )
-from .node import (
-    ActionNode,
-    BaseNode,
+from syntara_sdk.step import (
+    ActionStep,
+    BaseStep,
     StandardOutputWrapper,
-    TaskNode,
-    TriggerNode,
-    WorkflowNode,
-)
-from .registry.oci_client import (
-    OCI_ARTIFACT_TYPE,
-    OCI_MANIFEST_ANNOTATION,
-    OCIRegistryClient,
-    OCIRegistryError,
+    TaskStep,
+    TriggerStep,
+    WorkflowStep,
 )
 
 __all__ = [
-    "OCI_ARTIFACT_TYPE",
-    "OCI_MANIFEST_ANNOTATION",
-    "OCIRegistryClient",
-    "OCIRegistryError",
-    "ActionNode",
+    "ActionStep",
     "ApiKeyCredential",
-    "BaseNode",
+    "BaseStep",
     "BasicAuthCredential",
     "BearerTokenCredential",
     "CredentialMountType",
     "CredentialReference",
     "ExecutionContext",
     "StandardOutputWrapper",
-    "TaskNode",
-    "TriggerNode",
-    "WorkflowNode",
-    "compile_manifest",
-    "compile_manifest_data",
-    "load_manifest",
-    "validate_manifest",
+    "TaskStep",
+    "TriggerStep",
+    "WorkflowStep",
 ]

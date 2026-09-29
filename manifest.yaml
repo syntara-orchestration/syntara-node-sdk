@@ -1,30 +1,30 @@
-# Syntara Node SDK - Canonical Manifest Template
+# Syntara Step SDK - Canonical Manifest Template
 # This is the root template showing all available fields following Kubernetes CRD conventions.
-# Copy this template when creating new nodes.
+# Copy this template when creating new steps.
 
 apiVersion: syntara.io/v1alpha1
-kind: NodeType
+kind: StepType
 
 metadata:
-  # Internal node identifier (snake_case) - used as primary key
-  name: example_node
+  # Internal step identifier (snake_case) - used as primary key
+  name: example_step
 
   # Human-readable name displayed in UI palette and canvas
-  displayName: Example Node
+  displayName: Example Step
 
   # Semantic version (MAJOR.MINOR.PATCH)
   version: 1.0.0
 
-  # Icon identifier for React Flow palette (see NodePaletteIcon in common-definitions.json)
+  # Icon identifier for React Flow palette (see StepPaletteIcon in common-definitions.json)
   # Options: globe, database, script, webhook, loop, condition, git, cloud, mail, etc.
   icon: cube
 
   # Multi-line description (supports markdown)
   description: |
-    Brief description of what this node does.
+    Brief description of what this step does.
     Explain the primary use case and key capabilities.
 
-  # Searchable tags for filtering in the node palette
+  # Searchable tags for filtering in the step palette
   tags:
     - category:action
     - integration:rest-api
@@ -35,14 +35,14 @@ metadata:
   license: Apache-2.0
 
   # Optional: Link to detailed documentation
-  documentationUrl: https://docs.syntara.io/nodes/example-node
+  documentationUrl: https://docs.syntara.io/steps/example-step
 
 spec:
-  # Node category: action | task | workflow | trigger
+  # Step category: action | task | workflow | trigger
   category: action
 
   # Sandbox, egress, and worker-pool policy are intentionally omitted here.
-  # Administrators provide those controls in POST /api/v1/node-types.
+  # Administrators provide those controls in POST /api/v1/step-types.
 
   # Execution configuration
   execution:
@@ -50,9 +50,9 @@ spec:
     type: container
 
     # Container image reference (required for type: container)
-    image: registry.syntara.io/nodes/example-node:1.0.0
+    image: registry.syntara.io/steps/example-step:1.0.0
 
-    # Optional process command. Use null for in_process nodes.
+    # Optional process command. Use null for in_process steps.
     entrypoint: null
 
   # Developer-declared extension requirements. These describe the capabilities
@@ -109,7 +109,7 @@ spec:
       # its logging and persistence guarantees using the same schema flag.
       api_key:
         type: string
-        description: API key supplied to the node at runtime
+        description: API key supplied to the step at runtime
         secret: true
 
       # Example: Enum with default

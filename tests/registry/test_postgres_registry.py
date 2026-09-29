@@ -11,11 +11,11 @@
 #     "psycopg[binary]>=3.1",
 # ]
 # ///
-"""End-to-end registry + advertisement prototype for the ``http_request`` node.
+"""End-to-end registry + advertisement prototype for the ``http_request`` step.
 
     ┌───────────────────────────────────────────────────────────────────┐
     │ CONTROL-PLANE SDK DELIVERABLE — the registration & advertisement   │
-    │ half of the Node SDK. Where test_register.py proves validate ->    │
+    │ half of the Step SDK. Where test_register.py proves validate ->    │
     │ compile -> persist for a single row, this proves the *full* loop    │
     │ the visual builder depends on: a REST surface that ingests a        │
     │ manifest, persists the compiled descriptor to PostgreSQL, and       │
@@ -24,27 +24,27 @@
 
 The prototype wires three layers together:
 
-1. **Storage** - a ``NodeType`` SQLModel table matching the target platform DDL,
+1. **Storage** - a ``StepType`` SQLModel table matching the target platform DDL,
    including the ``CHECK (execution_type != 'container' OR image_ref IS NOT NULL)``
    constraint. The ``descriptor`` column is JSONB on PostgreSQL and falls back to
    generic JSON on SQLite so the same model runs in-memory in CI.
 2. **SDK pipeline** - load ``manifest.yaml``, validate it against
    ``common-definitions.json`` (Draft-07, via ``$ref``), and compile it into the
-   runtime ``node-definition.json`` descriptor.
+   runtime ``step-definition.json`` descriptor.
 3. **Advertisement API** - a FastAPI app implementing the registry REST contract
-   documented in ``node-sdk-architecture.md`` (standard ``{data, meta}`` envelope,
+   documented in ``step-sdk-architecture.md`` (standard ``{data, meta}`` envelope,
    id-addressable resources, pagination + filtering) plus the two React Flow
    visual-builder additions that doc calls out:
 
-     * ``POST /api/v1/node-types``                    - register (ingests a
+     * ``POST /api/v1/step-types``                    - register (ingests a
        YAML/JSON manifest, validates, compiles, upserts). Returns ``{data: record}``.
-     * ``GET  /api/v1/node-types``                    - list envelope; filter by
+     * ``GET  /api/v1/step-types``                    - list envelope; filter by
        ``category`` / ``execution_type`` / ``enabled``; ``?view=palette`` returns
        the React Flow drawer summaries instead of the record projection.
-     * ``GET  /api/v1/node-types/{id_or_name}``       - fetch one record; the path
-       accepts a UUID *or* a node ``name`` (the UI-facing alias).
-     * ``GET  /api/v1/node-types/{id_or_name}/descriptor`` - the raw compiled
-       ``node-definition.json``, unwrapped, for direct canvas form rendering.
+     * ``GET  /api/v1/step-types/{id_or_name}``       - fetch one record; the path
+       accepts a UUID *or* a step ``name`` (the UI-facing alias).
+     * ``GET  /api/v1/step-types/{id_or_name}/descriptor`` - the raw compiled
+       ``step-definition.json``, unwrapped, for direct canvas form rendering.
 
 Run standalone (fetches deps in an ephemeral env):
 
@@ -75,7 +75,6 @@ import pytest
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.testclient import TestClient
-from jsonschema import Draft7Validator
 from sqlalchemy import JSON, MetaData
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
@@ -91,27 +90,32 @@ from sqlmodel import (
     create_engine,
     select,
 )
+from syntara_tools.compiler import (
+    load_manifest as sdk_load_manifest,
+)
+from syntara_tools.compiler import (
+    validate_manifest as sdk_validate_manifest,
+)
 
-HERE = Path(__file__).resolve().parent
-REPO_ROOT = HERE.parent.parent
+REGISTRY_TESTS_DIR = Path(__file__).resolve().parent
+REPO_ROOT = REGISTRY_TESTS_DIR.parent.parent
 SCHEMAS_ROOT = REPO_ROOT / "schemas"
-NODES_ROOT = REPO_ROOT / "nodes"
-MANIFEST_PATH = NODES_ROOT / "http-request" / "manifest.yaml"
-COMMON_DEFINITIONS_PATH = SCHEMAS_ROOT / "common-definitions.json"
-COMPILED_PATH = HERE / "node-definition.json"
+FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "steps"
+MANIFEST_PATH = FIXTURES_DIR / "http_request" / "manifest.yaml"
+COMPILED_PATH = REGISTRY_TESTS_DIR / "step-definition.json"
 
 # Shared, hardened execution-plane HTTP executor image. A real build pipeline
 # injects the freshly built image ref at compile/publish time (see
-# build-manifest.sh: `ao-sdk publish --image <image-ref>`); the register endpoint
-# uses this as the default for container nodes when the caller supplies none.
+# build-manifest.sh: `syntara-sdk publish --image <image-ref>`); the register endpoint
+# uses this as the default for container steps when the caller supplies none.
 DEFAULT_CONTAINER_IMAGE = "quay.io/ahetheri/http-executor:dev"
 
 # Point this at a reachable PostgreSQL to run the DB-configuration path against a
 # real JSONB column + DDL CHECK instead of the in-memory SQLite default.
 POSTGRES_URL_ENV = "SYNTARA_TEST_DATABASE_URL"
 
-# React Flow palette fallback glyphs, keyed by node category. A manifest may
-# override this per node via a top-level ``icon`` field (see the NodePaletteIcon
+# React Flow palette fallback glyphs, keyed by step category. A manifest may
+# override this per step via a top-level ``icon`` field (see the StepPaletteIcon
 # definition in common-definitions.json).
 ICON_BY_CATEGORY = {
     "action": "cube",
@@ -125,43 +129,43 @@ DEFAULT_PAGE_LIMIT = 50
 
 
 # ---------------------------------------------------------------------------
-# Registry model - matches the target platform node_types DDL.
+# Registry model - matches the target platform step_types DDL.
 # ---------------------------------------------------------------------------
-class NodeCategory(StrEnum):
+class StepCategory(StrEnum):
     ACTION = "action"
     TASK = "task"
     WORKFLOW = "workflow"
     TRIGGER = "trigger"
 
 
-class NodeExecutionType(StrEnum):
+class StepExecutionType(StrEnum):
     IN_PROCESS = "in_process"
     CONTAINER = "container"
 
 
 class RegistryModel(SQLModel):
-    """Base with a private MetaData so this prototype's ``node_types`` table does
+    """Base with a private MetaData so this prototype's ``step_types`` table does
     not collide with the identically named table in the sibling
     ``test_register.py`` when both are collected in a single pytest session."""
 
     metadata = MetaData()
 
 
-class NodeType(RegistryModel, table=True):
-    """Registry record for one compiled node definition.
+class StepType(RegistryModel, table=True):
+    """Registry record for one compiled step definition.
 
-    The ``descriptor`` column stores the full compiled ``node-definition.json``
+    The ``descriptor`` column stores the full compiled ``step-definition.json``
     so the canvas can render input forms without a frontend deployment. The
     CHECK constraint ties container execution to a resolvable image reference,
-    and ``(name, version)`` is unique so multiple versions of a node can coexist.
+    and ``(name, version)`` is unique so multiple versions of a step can coexist.
     """
 
-    __tablename__ = "node_types"
+    __tablename__ = "step_types"
     __table_args__ = (
-        UniqueConstraint("name", "version", name="uq_node_types_name_version"),
+        UniqueConstraint("name", "version", name="uq_step_types_name_version"),
         CheckConstraint(
             "execution_type != 'container' OR image_ref IS NOT NULL",
-            name="node_types_container_requires_image_ref",
+            name="step_types_container_requires_image_ref",
         ),
     )
 
@@ -172,10 +176,10 @@ class NodeType(RegistryModel, table=True):
     # Persist the enum *value* ("action"/"container") as TEXT + CHECK IN (...),
     # matching the target DDL. native_enum=False keeps this portable across
     # SQLite and PostgreSQL and stores the value, not the member name.
-    category: NodeCategory = Field(
+    category: StepCategory = Field(
         sa_column=Column(
             SAEnum(
-                NodeCategory,
+                StepCategory,
                 native_enum=False,
                 values_callable=lambda e: [m.value for m in e],
             ),
@@ -183,10 +187,10 @@ class NodeType(RegistryModel, table=True):
             nullable=False,
         )
     )
-    execution_type: NodeExecutionType = Field(
+    execution_type: StepExecutionType = Field(
         sa_column=Column(
             SAEnum(
-                NodeExecutionType,
+                StepExecutionType,
                 native_enum=False,
                 values_callable=lambda e: [m.value for m in e],
             ),
@@ -205,64 +209,23 @@ class NodeType(RegistryModel, table=True):
 # ---------------------------------------------------------------------------
 # SDK pipeline: load -> validate -> compile.
 # ---------------------------------------------------------------------------
+
 def load_manifest() -> dict[str, Any]:
-    with MANIFEST_PATH.open() as handle:
-        return yaml.safe_load(handle)
-
-
-def load_common_definitions() -> dict[str, Any]:
-    with COMMON_DEFINITIONS_PATH.open() as handle:
-        return json.load(handle)
-
-
-def build_validator() -> Draft7Validator:
-    """Build a node meta-schema validator wired to common-definitions.json.
-
-    The validator enforces the K8s CRD structure (apiVersion, kind, metadata, spec)
-    and references shared platform types via ``$ref`` for taxonomy fields.
-    """
-    common = load_common_definitions()
-    # Use the NodeTypeManifest schema from common-definitions.json
-    node_schema: dict[str, Any] = {
-        "$ref": "common-definitions.json#/definitions/NodeTypeManifest"
-    }
-
-    # jsonschema >= 4.18 uses the `referencing` library; fall back to the legacy
-    # RefResolver on older installs so this harness stays portable.
-    try:
-        from referencing import Registry, Resource
-
-        registry = Registry().with_resources(
-            [
-                ("common-definitions.json", Resource.from_contents(common)),
-                (common["$id"], Resource.from_contents(common)),
-            ]
-        )
-        return Draft7Validator(node_schema, registry=registry)
-    except ImportError:  # pragma: no cover - legacy jsonschema
-        from jsonschema import RefResolver
-
-        resolver = RefResolver(
-            base_uri="",
-            referrer=node_schema,
-            store={"common-definitions.json": common, common["$id"]: common},
-        )
-        return Draft7Validator(node_schema, resolver=resolver)
+    """Load the test manifest (http-request)."""
+    return sdk_load_manifest(MANIFEST_PATH)
 
 
 def validate_manifest(manifest: dict[str, Any]) -> list[str]:
-    """Return a list of human-readable validation errors (empty when valid)."""
-    validator = build_validator()
-    errors = sorted(validator.iter_errors(manifest), key=lambda e: list(e.path))
-    return [f"{'/'.join(map(str, e.path)) or '<root>'}: {e.message}" for e in errors]
+    """Validate manifest against platform schema."""
+    return sdk_validate_manifest(manifest, schemas_root=SCHEMAS_ROOT)
 
 
 def compile_manifest(manifest: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Compile manifest.yaml -> node-definition.json (the persisted artifact).
+    """Compile manifest.yaml -> step-definition.json (the persisted artifact).
 
     When no manifest is provided the on-disk ``manifest.yaml`` is loaded. The
-    compiled descriptor is written back to ``node-definition.json`` so the build
-    artifact stays in sync, mirroring ``build-manifest.sh``.
+    compiled descriptor is written back to ``step-definition.json`` so the build
+    artifact stays in sync.
 
     The K8s CRD structure (apiVersion, kind, metadata, spec) is preserved in the
     compiled output and stored directly in PostgreSQL JSONB.
@@ -281,13 +244,13 @@ def _version_key(version: str) -> tuple[int, ...]:
     return tuple(int(n) for n in re.findall(r"\d+", version)) or (0,)
 
 
-def _latest(rows: list[NodeType]) -> NodeType:
+def _latest(rows: list[StepType]) -> StepType:
     return max(rows, key=lambda r: _version_key(r.version))
 
 
-def _latest_per_name(rows: list[NodeType]) -> list[NodeType]:
-    """Collapse multiple versions to the highest version per node name."""
-    by_name: dict[str, NodeType] = {}
+def _latest_per_name(rows: list[StepType]) -> list[StepType]:
+    """Collapse multiple versions to the highest version per step name."""
+    by_name: dict[str, StepType] = {}
     for row in rows:
         current = by_name.get(row.name)
         if current is None or _version_key(row.version) > _version_key(current.version):
@@ -300,7 +263,7 @@ def _summarize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _palette_summary(row: NodeType) -> dict[str, Any]:
+def _palette_summary(row: StepType) -> dict[str, Any]:
     """Project a row into the React Flow drag-and-drop drawer summary (camelCase)."""
     descriptor = row.descriptor
     metadata = descriptor.get("metadata", {})
@@ -316,7 +279,7 @@ def _palette_summary(row: NodeType) -> dict[str, Any]:
     }
 
 
-def _list_item(row: NodeType) -> dict[str, Any]:
+def _list_item(row: StepType) -> dict[str, Any]:
     """The compact list projection from the documented registry API."""
     return {
         "id": str(row.id),
@@ -327,7 +290,7 @@ def _list_item(row: NodeType) -> dict[str, Any]:
     }
 
 
-def _record(row: NodeType) -> dict[str, Any]:
+def _record(row: StepType) -> dict[str, Any]:
     """The full single-resource record (snake_case) from the documented API."""
     return {
         "id": str(row.id),
@@ -353,38 +316,38 @@ def create_app(engine) -> FastAPI:
     The session dependency is bound to the provided engine so tests can inject a
     fresh in-memory database while production wires in a real PostgreSQL engine.
     """
-    app = FastAPI(title="Syntara Node Registry", version="1.0.0")
+    app = FastAPI(title="Syntara Step Registry", version="1.0.0")
 
     def get_session():
         with Session(engine) as session:
             yield session
 
-    def _resolve(session: Session, id_or_name: str) -> NodeType:
-        """Resolve a path segment that is either a UUID or a node name.
+    def _resolve(session: Session, id_or_name: str) -> StepType:
+        """Resolve a path segment that is either a UUID or a step name.
 
         Name lookups return the latest version — the UI-facing addressing mode.
         """
         try:
-            node_id = UUID(id_or_name)
+            step_id = UUID(id_or_name)
         except ValueError:
             rows = session.exec(
-                select(NodeType).where(NodeType.name == id_or_name)
+                select(StepType).where(StepType.name == id_or_name)
             ).all()
             if not rows:
-                raise HTTPException(404, f"node type '{id_or_name}' is not registered")
+                raise HTTPException(404, f"step type '{id_or_name}' is not registered")
             return _latest(list(rows))
-        row = session.get(NodeType, node_id)
+        row = session.get(StepType, step_id)
         if row is None:
-            raise HTTPException(404, f"node type '{id_or_name}' is not registered")
+            raise HTTPException(404, f"step type '{id_or_name}' is not registered")
         return row
 
-    @app.post("/api/v1/node-types", status_code=201)
-    async def register_node_type(
+    @app.post("/api/v1/step-types", status_code=201)
+    async def register_step_type(
         request: Request,
         image_ref: str | None = None,
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        """Validate, compile, and upsert a node manifest into the registry.
+        """Validate, compile, and upsert a step manifest into the registry.
 
         The raw request body is read directly and parsed as YAML (a superset of
         JSON), so the endpoint accepts either format regardless of the declared
@@ -393,7 +356,7 @@ def create_app(engine) -> FastAPI:
         raw = await request.body()
         if not raw.strip():
             raise HTTPException(
-                400, "request body is empty; POST a YAML or JSON node manifest"
+                400, "request body is empty; POST a YAML or JSON step manifest"
             )
         try:
             manifest = yaml.safe_load(raw)
@@ -415,29 +378,29 @@ def create_app(engine) -> FastAPI:
 
         name = metadata["name"]
         version = metadata.get("version", "1.0.0")
-        execution_type = NodeExecutionType(spec["execution"]["type"])
+        execution_type = StepExecutionType(spec["execution"]["type"])
 
         # A real build injects the freshly built image ref; default container
-        # nodes to the shared executor image, and forbid one for in_process.
+        # steps to the shared executor image, and forbid one for in_process.
         resolved_image = image_ref
-        if execution_type == NodeExecutionType.CONTAINER and not resolved_image:
+        if execution_type == StepExecutionType.CONTAINER and not resolved_image:
             resolved_image = DEFAULT_CONTAINER_IMAGE
-        if execution_type == NodeExecutionType.IN_PROCESS:
+        if execution_type == StepExecutionType.IN_PROCESS:
             resolved_image = None
 
         # Upsert on (name, version): re-publishing the same version updates in
         # place, a new version inserts a new row.
         existing = session.exec(
-            select(NodeType)
-            .where(NodeType.name == name)
-            .where(NodeType.version == version)
+            select(StepType)
+            .where(StepType.name == name)
+            .where(StepType.version == version)
         ).one_or_none()
-        row = existing or NodeType(name=name, version=version)
+        row = existing or StepType(name=name, version=version)
         if existing is None:
             session.add(row)
 
         row.display_name = metadata.get("displayName", name)
-        row.category = NodeCategory(spec["category"])
+        row.category = StepCategory(spec["category"])
         row.execution_type = execution_type
         row.image_ref = resolved_image
         row.descriptor = descriptor
@@ -452,8 +415,8 @@ def create_app(engine) -> FastAPI:
         session.refresh(row)
         return {"data": _record(row)}
 
-    @app.get("/api/v1/node-types")
-    def list_node_types(
+    @app.get("/api/v1/step-types")
+    def list_step_types(
         category: str | None = None,
         execution_type: str | None = None,
         enabled: bool | None = None,
@@ -464,26 +427,26 @@ def create_app(engine) -> FastAPI:
         offset: int = 0,
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        """List node types with the documented ``{data, meta}`` envelope."""
-        stmt = select(NodeType)
+        """List step types with the documented ``{data, meta}`` envelope."""
+        stmt = select(StepType)
         try:
             if category is not None:
-                stmt = stmt.where(NodeType.category == NodeCategory(category))
+                stmt = stmt.where(StepType.category == StepCategory(category))
             if execution_type is not None:
                 stmt = stmt.where(
-                    NodeType.execution_type == NodeExecutionType(execution_type)
+                    StepType.execution_type == StepExecutionType(execution_type)
                 )
         except ValueError as exc:
             raise HTTPException(400, f"invalid filter value: {exc}")
         if enabled is not None:
-            stmt = stmt.where(NodeType.enabled == enabled)
+            stmt = stmt.where(StepType.enabled == enabled)
 
         rows = list(
-            session.exec(stmt.order_by(NodeType.name, NodeType.version)).all()
+            session.exec(stmt.order_by(StepType.name, StepType.version)).all()
         )
 
         if view == "palette":
-            # Drawer view: one entry per node (latest version), UI camelCase shape.
+            # Drawer view: one entry per step (latest version), UI camelCase shape.
             summaries = [_palette_summary(row) for row in _latest_per_name(rows)]
             return {
                 "data": summaries,
@@ -496,23 +459,23 @@ def create_app(engine) -> FastAPI:
             "meta": {"total": len(rows), "limit": limit, "offset": offset},
         }
 
-    @app.get("/api/v1/node-types/{id_or_name}")
-    def get_node_type(
+    @app.get("/api/v1/step-types/{id_or_name}")
+    def get_step_type(
         id_or_name: str,
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        """Fetch a single node type record (id- or name-addressable)."""
+        """Fetch a single step type record (id- or name-addressable)."""
         return {"data": _record(_resolve(session, id_or_name))}
 
-    @app.get("/api/v1/node-types/{id_or_name}/descriptor")
-    def get_node_descriptor(
+    @app.get("/api/v1/step-types/{id_or_name}/descriptor")
+    def get_step_descriptor(
         id_or_name: str,
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         """Return the raw compiled descriptor, unwrapped, for the canvas renderer.
 
         This is the one deliberate exception to the standard envelope: the React
-        Flow canvas consumes ``node-definition.json`` verbatim to render forms,
+        Flow canvas consumes ``step-definition.json`` verbatim to render forms,
         default values, field groupings, and port bindings.
         """
         return _resolve(session, id_or_name).descriptor
@@ -557,7 +520,7 @@ def client(engine) -> TestClient:
 def _register_manifest(client: TestClient):
     """POST the on-disk http-request manifest as raw YAML."""
     return client.post(
-        "/api/v1/node-types",
+        "/api/v1/step-types",
         content=MANIFEST_PATH.read_text(),
         headers={"Content-Type": "application/yaml"},
     )
@@ -567,24 +530,24 @@ def _register_manifest(client: TestClient):
 # Tests
 # ---------------------------------------------------------------------------
 def test_register_http_request_succeeds(client: TestClient) -> None:
-    """Test 1: POST /node-types successfully registers the http-request node."""
+    """Test 1: POST /step-types successfully registers the http-request step."""
     response = _register_manifest(client)
     assert response.status_code == 201, response.text
     record = response.json()["data"]
     assert record["name"] == "http_request"
     assert record["execution_type"] == "container"
     assert record["enabled"] is True
-    # Container node was assigned the default executor image so the DDL CHECK
+    # Container step was assigned the default executor image so the DDL CHECK
     # (container => image_ref present) is satisfied.
     assert record["image_ref"] == DEFAULT_CONTAINER_IMAGE
     UUID(record["id"])  # id is a real UUID
 
 
 def test_palette_summary_matches_ui_contract(client: TestClient) -> None:
-    """Test 2: GET /node-types?view=palette returns the React Flow drawer summary."""
+    """Test 2: GET /step-types?view=palette returns the React Flow drawer summary."""
     assert _register_manifest(client).status_code == 201
 
-    response = client.get("/api/v1/node-types", params={"view": "palette"})
+    response = client.get("/api/v1/step-types", params={"view": "palette"})
     assert response.status_code == 200, response.text
     payload = response.json()
     assert set(payload) == {"data", "meta"}
@@ -618,7 +581,7 @@ def test_list_envelope_matches_documented_contract(client: TestClient) -> None:
     assert _register_manifest(client).status_code == 201
 
     response = client.get(
-        "/api/v1/node-types", params={"category": "action", "enabled": "true"}
+        "/api/v1/step-types", params={"category": "action", "enabled": "true"}
     )
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -628,35 +591,35 @@ def test_list_envelope_matches_documented_contract(client: TestClient) -> None:
     assert item["execution_type"] == "container"
 
     # A non-matching filter yields an empty page, not an error.
-    empty = client.get("/api/v1/node-types", params={"category": "trigger"}).json()
+    empty = client.get("/api/v1/step-types", params={"category": "trigger"}).json()
     assert empty["data"] == [] and empty["meta"]["total"] == 0
 
 
 def test_fetch_record_by_id_and_by_name(client: TestClient) -> None:
-    """A record is addressable by UUID and by its node name (the UI alias)."""
+    """A record is addressable by UUID and by its step name (the UI alias)."""
     record = _register_manifest(client).json()["data"]
-    node_id = record["id"]
+    step_id = record["id"]
 
-    by_id = client.get(f"/api/v1/node-types/{node_id}")
-    by_name = client.get("/api/v1/node-types/http_request")
+    by_id = client.get(f"/api/v1/step-types/{step_id}")
+    by_name = client.get("/api/v1/step-types/http_request")
     assert by_id.status_code == by_name.status_code == 200
-    assert by_id.json()["data"]["id"] == by_name.json()["data"]["id"] == node_id
+    assert by_id.json()["data"]["id"] == by_name.json()["data"]["id"] == step_id
     assert "descriptor" in by_id.json()["data"]
 
 
 def test_canvas_descriptor_exposes_inputs_and_output_envelope(
     client: TestClient,
 ) -> None:
-    """Test 3: GET /node-types/{name}/descriptor returns the raw descriptor."""
+    """Test 3: GET /step-types/{name}/descriptor returns the raw descriptor."""
     assert _register_manifest(client).status_code == 201
 
-    response = client.get("/api/v1/node-types/http_request/descriptor")
+    response = client.get("/api/v1/step-types/http_request/descriptor")
     assert response.status_code == 200, response.text
-    descriptor = response.json()  # raw node-definition.json, unwrapped
+    descriptor = response.json()  # raw step-definition.json, unwrapped
 
     # Verify K8s CRD structure
     assert descriptor["apiVersion"] == "syntara.io/v1alpha1"
-    assert descriptor["kind"] == "NodeType"
+    assert descriptor["kind"] == "StepType"
     assert "metadata" in descriptor
     assert "spec" in descriptor
 
@@ -674,15 +637,15 @@ def test_canvas_descriptor_exposes_inputs_and_output_envelope(
 
 
 def test_check_constraint_rejects_container_without_image_ref(engine) -> None:
-    """Test 4: a container node with image_ref=None violates the CHECK constraint."""
+    """Test 4: a container step with image_ref=None violates the CHECK constraint."""
     descriptor = compile_manifest()
     with Session(engine) as session:
         session.add(
-            NodeType(
+            StepType(
                 name="http_request_bad",
                 display_name="HTTP Request (bad)",
-                category=NodeCategory.ACTION,
-                execution_type=NodeExecutionType.CONTAINER,
+                category=StepCategory.ACTION,
+                execution_type=StepExecutionType.CONTAINER,
                 image_ref=None,  # violates: container requires image_ref
                 descriptor=descriptor,
             )
@@ -695,21 +658,21 @@ def test_register_same_version_is_idempotent_upsert(client: TestClient) -> None:
     """Re-registering the same (name, version) updates in place, no duplicate."""
     assert _register_manifest(client).status_code == 201
     assert _register_manifest(client).status_code == 201
-    payload = client.get("/api/v1/node-types").json()
+    payload = client.get("/api/v1/step-types").json()
     assert payload["meta"]["total"] == 1
 
 
-def test_get_unknown_node_returns_404(client: TestClient) -> None:
-    assert client.get("/api/v1/node-types/does_not_exist").status_code == 404
+def test_get_unknown_step_returns_404(client: TestClient) -> None:
+    assert client.get("/api/v1/step-types/does_not_exist").status_code == 404
     assert (
-        client.get("/api/v1/node-types/does_not_exist/descriptor").status_code == 404
+        client.get("/api/v1/step-types/does_not_exist/descriptor").status_code == 404
     )
 
 
 def test_register_rejects_invalid_manifest(client: TestClient) -> None:
     """A manifest missing required taxonomy fields is rejected at validation."""
-    broken = {"nodeType": "broken", "inputs": {"properties": {}}}
-    response = client.post("/api/v1/node-types", json=broken)
+    broken = {"stepType": "broken", "inputs": {"properties": {}}}
+    response = client.post("/api/v1/step-types", json=broken)
     assert response.status_code == 422, response.text
 
 
@@ -733,7 +696,7 @@ def _run_standalone() -> int:
         ("test_canvas_descriptor_exposes_inputs_and_output_envelope", lambda: test_canvas_descriptor_exposes_inputs_and_output_envelope(fresh_client())),
         ("test_check_constraint_rejects_container_without_image_ref", lambda: test_check_constraint_rejects_container_without_image_ref(fresh_engine())),
         ("test_register_same_version_is_idempotent_upsert", lambda: test_register_same_version_is_idempotent_upsert(fresh_client())),
-        ("test_get_unknown_node_returns_404", lambda: test_get_unknown_node_returns_404(fresh_client())),
+        ("test_get_unknown_step_returns_404", lambda: test_get_unknown_step_returns_404(fresh_client())),
         ("test_register_rejects_invalid_manifest", lambda: test_register_rejects_invalid_manifest(fresh_client())),
     ]
     passed = skipped = failed = 0

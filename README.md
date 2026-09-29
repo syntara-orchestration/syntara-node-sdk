@@ -1,17 +1,17 @@
-# Syntara Node SDK
+# Syntara Step SDK
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![PostgreSQL 15+](https://img.shields.io/badge/postgresql-15+-blue.svg)](https://www.postgresql.org/)
 
-A schema-driven framework for authoring, packaging, and registering custom automation nodes for workflow orchestration. Build type-safe, composable automation nodes with declarative YAML manifests that compile to runtime-ready JSON definitions.
+A schema-driven framework for authoring, packaging, and registering custom automation steps for workflow orchestration. Build type-safe, composable automation steps with declarative YAML manifests that compile to runtime-ready JSON definitions.
 
 ## Features
 
-- **🎯 Type-Safe Authoring** — Author nodes in human-friendly YAML with JSON Schema validation (Draft-07)
+- **🎯 Type-Safe Authoring** — Author steps in human-friendly YAML with JSON Schema validation (Draft-07)
 - **🔒 Zero-Trust Security** — Credential references only; sensitive values are separated into the transient stdin `credentials` map, with runtime injection and persistence safeguards owned by the execution plane
 - **📦 Four-Category Taxonomy** — `action` (integrations), `task` (compute), `workflow` (control flow), `trigger` (events)
-- **⚡ Fast Canvas Rendering** — Compiled node definitions enable <500ms dynamic form rendering
+- **⚡ Fast Canvas Rendering** — Compiled step definitions enable <500ms dynamic form rendering
 - **🔌 Kubernetes-Native** — Follows K8s CRD conventions (`apiVersion`, `kind`, `metadata`, `spec`)
 - **🛡️ Declarative Permissions** — Static capability inspection before execution-plane dispatch
 - **🔄 Backwards Compatible** — Immutable output envelope (`StandardOutputWrapper`) ensures stable template expressions
@@ -28,51 +28,51 @@ pip install -e ./sdk-python
 pip install -e .
 ```
 
-### Scaffold and Package Nodes
+### Scaffold and Package Steps
 
-Use the CLI to create a shared-runner script node or a dedicated-image node:
+Use the CLI to create a shared-runner script step or a dedicated-image step:
 
 ```bash
-syntara-cli init normalize_payload --tier 2  # shared-runner script node
-syntara-cli init customer_lookup --tier 3 --image quay.io/example/customer-lookup:1.0.0  # dedicated container extension
-syntara-cli build customer_lookup/manifest.yaml --output customer-lookup-oci
+syntara-sdk init normalize_payload --tier 2  # shared-runner script step
+syntara-sdk init customer_lookup --tier 3 --image quay.io/example/customer-lookup:1.0.0  # dedicated container extension
+syntara-sdk build customer_lookup/manifest.yaml --output customer-lookup-oci
 
 # Local prototype: publish to OCI, then register in Syntara automatically
-syntara-cli push customer_lookup/manifest.yaml \
-  --registry localhost:5000/syntara/nodes/customer-lookup:1.0.0
+syntara-sdk push customer_lookup/manifest.yaml \
+  --registry localhost:5000/syntara/steps/customer-lookup:1.0.0
 ```
 
 Dedicated container-extension builds emit a standard OCI image manifest with artifact type
-`application/vnd.syntara.node.manifest.v1+yaml` and the validated YAML manifest
-in the `org.syntara.node.manifest` annotation.
+`application/vnd.syntara.step.manifest.v1+yaml` and the validated YAML manifest
+in the `org.syntara.step.manifest` annotation.
 
 `push` publishes the OCI metadata and then calls
-`POST /api/v1/node-types` to add the node to Syntara's available-node catalog.
+`POST /api/v1/step-types` to add the step to Syntara's available-step catalog.
 Use `--skip-register` for registry-only publishing or `--api-url` to target a
 different Syntara instance.
 
-### Create Your First Node
+### Create Your First Step
 
 **1. Copy the manifest template:**
 
 ```bash
 # Use the canonical template as a starting point
-cp manifest.yaml nodes/my-http-node/manifest.yaml
-cd nodes/my-http-node
+cp manifest.yaml steps/my-http-step/manifest.yaml
+cd steps/my-http-step
 ```
 
 **2. Edit `manifest.yaml` (K8s CRD structure):**
 
 ```yaml
 apiVersion: syntara.io/v1alpha1
-kind: NodeType
+kind: StepType
 
 metadata:
-  name: my_http_node
-  displayName: My HTTP Node
+  name: my_http_step
+  displayName: My HTTP Step
   version: 1.0.0
   icon: globe
-  description: Custom HTTP request node with retry logic
+  description: Custom HTTP request step with retry logic
   tags:
     - integration:rest-api
     - network:external
@@ -82,7 +82,7 @@ spec:
   category: action
   execution:
     type: container
-    image: registry.example.com/nodes/my-http-node:1.0.0
+    image: registry.example.com/steps/my-http-step:1.0.0
 
   declaredRequirements:
     capabilities:
@@ -138,18 +138,17 @@ if errors:
     print("Validation errors:", errors)
 
 # Compile (validates + prepares for database)
-descriptor = compile_manifest("nodes/my-http-node/manifest.yaml")
+descriptor = compile_manifest("steps/my-http-step/manifest.yaml")
 print(f"✓ Compiled: {descriptor['metadata']['name']}")
 ```
 
-**Test your node locally:**
+**Test your step locally:**
 
 ```bash
 # Run the SDK runner
-PYTHONPATH="nodes/my-http-node:$PYTHONPATH" \
-  python -m syntara_sdk.runner \
-  --module src.main \
-  --class MyNode \
+python -m syntara_sdk.runner \
+  --module my_step_package.src.main \
+  --class MyStep \
   --inputs-file test_inputs.json
 ```
 
@@ -160,15 +159,15 @@ the registration API. The CLI publishes the OCI manifest and then registers the
 image with Syntara automatically:
 
 ```bash
-syntara-cli push nodes/http-request/manifest.yaml \
-  --registry localhost:5000/syntara/nodes/http-request:1.0.0 \
+syntara-sdk push tests/fixtures/steps/http_request/manifest.yaml \
+  --registry localhost:5000/syntara/steps/http-request:1.0.0 \
   --api-url http://localhost:5173
 ```
 
-Use `--skip-register` when publishing to a registry without making the node
+Use `--skip-register` when publishing to a registry without making the step
 available in Syntara yet. An administrator or deployment process can then
 register the existing image later by posting its `image_ref` to
-`POST /api/v1/node-types`.
+`POST /api/v1/step-types`.
 
 ## Architecture
 
@@ -178,7 +177,7 @@ Syntara follows a **define-once, consume-everywhere** model:
 graph LR
     AUTHOR["Author<br/>manifest.yaml"]
     VALIDATE["Validate<br/>(JSON Schema)"]
-    BUILD["Build<br/>node-definition.json"]
+    BUILD["Build<br/>step-definition.json"]
     REGISTRY["Registry<br/>(PostgreSQL)"]
     CANVAS["Canvas<br/>(React UI)"]
     ORCHESTRATOR["Orchestrator<br/>(Workflow Engine)"]
@@ -188,7 +187,7 @@ graph LR
     REGISTRY --> ORCHESTRATOR
 ```
 
-### Node Categories
+### Step Categories
 
 | Category | Purpose | Execution | Examples |
 |----------|---------|-----------|----------|
@@ -200,72 +199,40 @@ graph LR
 ### Execution Types
 
 - **`in_process`** — Runs as a built-in workflow activity inside the orchestrator (zero pod overhead)
-- **`container`** — Hands the node contract to the execution plane for isolated execution
+- **`container`** — Hands the step contract to the execution plane for isolated execution
 
 ## Examples
 
-The SDK includes reference implementations for each node category:
+The SDK includes reference implementations for each step category:
 
 | Example | Category | Location |
 |---------|----------|----------|
-| **HTTP Request** | action | [nodes/http-request/](nodes/http-request/) |
-| **Script Executor** | task | [nodes/script-executor/](nodes/script-executor/) |
-| **Subworkflow Call** | workflow | [nodes/subworkflow-call/](nodes/subworkflow-call/) |
-| **Subworkflow Trigger** | trigger | [nodes/subworkflow-trigger/](nodes/subworkflow-trigger/) |
+| **HTTP Request** | action | [tests/fixtures/steps/http_request/](tests/fixtures/steps/http_request/) |
+| **Script Executor** | task | [tests/fixtures/steps/script_executor/](tests/fixtures/steps/script_executor/) |
+| **Subworkflow Call** | workflow | [tests/fixtures/steps/subworkflow_call/](tests/fixtures/steps/subworkflow_call/) |
+| **Subworkflow Trigger** | trigger | [tests/fixtures/steps/subworkflow_trigger/](tests/fixtures/steps/subworkflow_trigger/) |
 
 ### Run Example Tests
 
 ```bash
 # Registry platform tests (9 tests)
-uv run pytest tests/registry/test_postgres_registry.py
+pytest tests/registry/test_postgres_registry.py
 
-# HTTP Request node unit tests (12 tests)
-PYTHONPATH="nodes/http-request:$PYTHONPATH" \
-  pytest tests/nodes/http-request/test_http_node.py -v
+# HTTP Request step unit tests (12 tests)
+pytest tests/test_http_step.py -v
 
-# Run node directly with CLI runner
-cd nodes/http-request
-PYTHONPATH=".:$PYTHONPATH" \
-  python -m syntara_sdk.runner \
-  --module src.main \
-  --class HttpRequestNode \
-  --inputs-file ../../tests/nodes/http-request/test_inputs.json
+# Run step directly with CLI runner
+python -m syntara_sdk.runner \
+  --module tests.fixtures.steps.http_request.src.main \
+  --class HttpRequestStep \
+  --inputs-file test_inputs.json
 ```
-
-**Expected output:**
-
-```
-Registry: 9 passed, 0 skipped, 0 failed
-Node tests: 12 passed in 0.07s
-CLI runner: StatusCode 0, HTTP 200 OK
-```
-
-## Registry REST API
-
-The node registry exposes a versioned REST API for node lifecycle management:
-
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `POST` | `/api/v1/node-types` | Register a new node |
-| `GET` | `/api/v1/node-types` | List nodes (supports filtering) |
-| `GET` | `/api/v1/node-types/{id}` | Fetch node details |
-| `GET` | `/api/v1/node-types/{id}/descriptor` | Get compiled definition for canvas |
-| `PATCH` | `/api/v1/node-types/{id}` | Update node metadata |
-| `DELETE` | `/api/v1/node-types/{id}` | Remove node from registry |
-
-**Special Query Parameters:**
-
-- `?view=palette` — Returns UI-optimized summaries for the drag-and-drop node palette
-- `?category=action` — Filter by node category
-- `?enabled=true` — Filter by enabled status
-
-See [docs/architecture.md](docs/architecture.md) for complete API documentation.
 
 ## Security Model
 
 ### Zero-Trust Credentials
 
-Node manifests and compiled descriptors store only abstract credential references, never credential values. Credential references are passed to the execution plane so resolved values can be carried separately from plain inputs in the transient stdin payload:
+Step manifests and compiled descriptors store only abstract credential references, never credential values. Credential references are passed to the execution plane so resolved values can be carried separately from plain inputs in the transient stdin payload:
 
 ```yaml
 spec:
@@ -281,7 +248,7 @@ At dispatch time, the SDK contract separates sensitive input values from plain `
 
 ### Declarative Permissions
 
-Every node declares its requirements upfront in the manifest:
+Every step declares its requirements upfront in the manifest:
 
 ```yaml
 spec:
@@ -302,19 +269,14 @@ spec:
 
 Administrators can audit these requirements **before** execution-plane dispatch. The execution plane consumes the declarations together with registration policy to apply its runtime controls.
 
-### Workload Classification
-
-- **`action`** — Deterministic, scripted execution. May access infrastructure credentials (SSH keys, cloud API tokens)
-- **`agentic`** — LLM-driven, non-deterministic execution. **Blocked from infrastructure credentials** to prevent prompt injection escalation
-
 ## Documentation
 
 - **[Architecture Guide](docs/architecture.md)** — Complete technical specification
 - **[Common Definitions](schemas/common-definitions.json)** — Platform meta-schema (JSON Schema Draft-07)
-- **[HTTP Request Example](nodes/http-request/)** — Full `action` node reference implementation
-- **[Script Executor Example](nodes/script-executor/)** — Full `task` node reference implementation
-- **[Subworkflow Trigger Example](nodes/subworkflow-trigger/)** — Child-side `trigger` descriptor and Reference-mode eligibility contract
-- **[Subworkflow Call Example](nodes/subworkflow-call/)** — Parent-side `workflow` node descriptor for Reference-mode child invocation
+- **[HTTP Request Example](tests/fixtures/steps/http_request/)** — Full `action` step reference implementation
+- **[Script Executor Example](tests/fixtures/steps/script_executor/)** — Full `task` step reference implementation
+- **[Subworkflow Trigger Example](tests/fixtures/steps/subworkflow_trigger/)** — Child-side `trigger` descriptor and Reference-mode eligibility contract
+- **[Subworkflow Call Example](tests/fixtures/steps/subworkflow_call/)** — Parent-side `workflow` step descriptor for Reference-mode child invocation
 
 ## Development
 
@@ -322,15 +284,15 @@ Administrators can audit these requirements **before** execution-plane dispatch.
 
 - **Python 3.12+**
 - **PostgreSQL 15+** (for registry storage)
-- **Kubernetes/OpenShift cluster** (for container node execution)
+- **Kubernetes/OpenShift cluster** (for container step execution)
 - **uv** (Python package manager): `pip install uv`
 
 ### Setup
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/syntara-node-sdk.git
-cd syntara-node-sdk
+git clone https://github.com/yourusername/syntara-step-sdk.git
+cd syntara-step-sdk
 
 # Install the SDK package
 pip install -e ./sdk-python
@@ -346,22 +308,18 @@ export SYNTARA_TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/s
 
 # Run tests
 uv run pytest tests/registry/test_postgres_registry.py
-
-# Or run with pytest
-PYTHONPATH="nodes/http-request:$PYTHONPATH" \
-  pytest tests/nodes/http-request/test_http_node.py -v
 ```
 
 ### Project Structure
 
 ```
-syntara-node-sdk/
+syntara-step-sdk/
 ├── schemas/
 │   └── common-definitions.json        # Platform meta-schema
-├── nodes/
-│   ├── http-request/                  # Action node example
-│   ├── script-executor/               # Task node example
-│   └── subworkflow-trigger/           # Trigger node example
+├── steps/
+│   ├── http-request/                  # Action step example
+│   ├── script-executor/               # Task step example
+│   └── subworkflow-trigger/           # Trigger step example
 ├── sdk-python/
 │   └── syntara_sdk/                   # Python SDK & base classes
 ├── docs/

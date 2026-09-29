@@ -1,7 +1,7 @@
 [project]
 name = "syntara-sdk"
 version = "0.1.0"
-description = "Python SDK for building Syntara automation nodes"
+description = "Python SDK for building Syntara automation steps"
 authors = [
     {name = "Syntara Team"}
 ]
