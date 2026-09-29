@@ -1,4 +1,4 @@
-"""Credential handling for Syntara nodes."""
+"""Credential handling for Syntara steps."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ class CredentialMountType(StrEnum):
     ENV = "env"  # Environment variable
     FILE = "file"  # File on disk
     TMPFS_FILE = "tmpfs_file"  # RAM-backed tmpfs file
-    HEADER = "header"  # HTTP header (for API nodes)
+    HEADER = "header"  # HTTP header (for API steps)
 
 
 class CredentialReference(BaseModel):

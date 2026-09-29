@@ -1,4 +1,4 @@
-"""Local CLI runner for testing Syntara nodes offline."""
+"""Local CLI runner for testing Syntara steps offline."""
 
 from __future__ import annotations
 
@@ -9,19 +9,19 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-from .context import ExecutionContext
-from .node import BaseNode
+from syntara_sdk.context import ExecutionContext
+from syntara_sdk.step import BaseStep
 
 
-def load_node_class(module_path: str, class_name: str) -> type[BaseNode]:
-    """Dynamically load a node class from a Python module.
+def load_step_class(module_path: str, class_name: str) -> type[BaseStep]:
+    """Dynamically load a step class from a Python module.
 
     Args:
         module_path: Python module path (e.g., 'examples.http_request.src.main')
-        class_name: Node class name (e.g., 'HttpRequestNode')
+        class_name: Step class name (e.g., 'HttpRequestStep')
 
     Returns:
-        Node class
+        Step class
 
     Raises:
         ImportError: If module or class cannot be loaded
@@ -32,18 +32,18 @@ def load_node_class(module_path: str, class_name: str) -> type[BaseNode]:
         raise ImportError(f"Failed to import module '{module_path}': {e}")
 
     try:
-        node_class = getattr(module, class_name)
+        step_class = getattr(module, class_name)
     except AttributeError:
         raise ImportError(
             f"Class '{class_name}' not found in module '{module_path}'"
         )
 
-    if not issubclass(node_class, BaseNode):
+    if not issubclass(step_class, BaseStep):
         raise TypeError(
-            f"{class_name} must be a subclass of BaseNode"
+            f"{class_name} must be a subclass of BaseStep"
         )
 
-    return node_class
+    return step_class
 
 
 def load_inputs_from_file(path: Path) -> dict[str, Any]:
@@ -66,16 +66,16 @@ def load_inputs_from_file(path: Path) -> dict[str, Any]:
         return json.load(f)
 
 
-def run_node_local(
-    node_class: type[BaseNode],
+def run_step_local(
+    step_class: type[BaseStep],
     inputs: dict[str, Any],
     execution_id: str | None = None,
     workflow_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute a node locally with the given inputs.
+    """Execute a step locally with the given inputs.
 
     Args:
-        node_class: Node class to instantiate and run
+        step_class: Step class to instantiate and run
         inputs: Input dictionary
         execution_id: Optional execution ID
         workflow_id: Optional workflow ID
@@ -87,38 +87,38 @@ def run_node_local(
     context = ExecutionContext(
         execution_id=execution_id,
         workflow_id=workflow_id,
-        node_name=node_class.__name__,
+        step_name=step_class.__name__,
     )
 
-    # Instantiate node (subclasses must provide input/output models)
-    node = node_class()
+    # Instantiate step (subclasses must provide input/output models)
+    step = step_class()
 
     # Execute and return wrapped output
-    output = node.execute_raw(inputs, context)
+    output = step.execute_raw(inputs, context)
     return output.model_dump()
 
 
 def main() -> int:
-    """CLI entrypoint for local node testing.
+    """CLI entrypoint for local step testing.
 
     Returns:
         Exit code (0 = success, 1 = failure)
     """
     parser = argparse.ArgumentParser(
-        description="Run a Syntara node locally for testing",
+        description="Run a Syntara step locally for testing",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Run with inline JSON inputs
   python -m syntara_sdk.runner \\
     --module examples.http_request.src.main \\
-    --class HttpRequestNode \\
+    --class HttpRequestStep \\
     --inputs '{"url": "https://httpbin.org/get", "method": "GET"}'
 
   # Run with inputs from file
   python -m syntara_sdk.runner \\
     --module examples.http_request.src.main \\
-    --class HttpRequestNode \\
+    --class HttpRequestStep \\
     --inputs-file inputs.json
         """,
     )
@@ -132,7 +132,7 @@ Examples:
         "--class",
         dest="class_name",
         required=True,
-        help="Node class name (e.g., 'HttpRequestNode')",
+        help="Step class name (e.g., 'HttpRequestStep')",
     )
 
     input_group = parser.add_mutually_exclusive_group(required=True)
@@ -163,9 +163,9 @@ Examples:
     args = parser.parse_args()
 
     try:
-        # Load node class
-        print(f"Loading node: {args.module}.{args.class_name}", file=sys.stderr)
-        node_class = load_node_class(args.module, args.class_name)
+        # Load step class
+        print(f"Loading step: {args.module}.{args.class_name}", file=sys.stderr)
+        step_class = load_step_class(args.module, args.class_name)
 
         # Load inputs
         if args.inputs:
@@ -174,10 +174,10 @@ Examples:
             print(f"Loading inputs from: {args.inputs_file}", file=sys.stderr)
             inputs = load_inputs_from_file(args.inputs_file)
 
-        # Run node
-        print("Executing node...", file=sys.stderr)
-        output = run_node_local(
-            node_class,
+        # Run step
+        print("Executing step...", file=sys.stderr)
+        output = run_step_local(
+            step_class,
             inputs,
             execution_id=args.execution_id,
             workflow_id=args.workflow_id,

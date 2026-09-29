@@ -1,4 +1,4 @@
-"""Execution context for Syntara nodes."""
+"""Execution context for Syntara steps."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 
 class ExecutionContext:
-    """Execution context providing node runtime environment.
+    """Execution context providing step runtime environment.
 
     Tracks execution metadata, provides structured logging, and manages
     access to mounted secrets in the tmpfs filesystem.
@@ -18,7 +18,7 @@ class ExecutionContext:
     Attributes:
         execution_id: Unique identifier for this execution
         workflow_id: Parent workflow identifier
-        node_name: Name of the executing node
+        step_name: Name of the executing step
         secret_mount_path: Base path where secrets are mounted (tmpfs)
         logger: Structured logger for this execution
     """
@@ -27,7 +27,7 @@ class ExecutionContext:
         self,
         execution_id: str | UUID | None = None,
         workflow_id: str | UUID | None = None,
-        node_name: str = "unknown",
+        step_name: str = "unknown",
         secret_mount_path: Path | str = "/run/secrets",
     ) -> None:
         """Initialize execution context.
@@ -35,16 +35,16 @@ class ExecutionContext:
         Args:
             execution_id: Unique execution identifier (generated if not provided)
             workflow_id: Parent workflow identifier
-            node_name: Name of the executing node
+            step_name: Name of the executing step
             secret_mount_path: Base directory for mounted secrets
         """
         self.execution_id = str(execution_id) if execution_id else str(uuid4())
         self.workflow_id = str(workflow_id) if workflow_id else None
-        self.node_name = node_name
+        self.step_name = step_name
         self.secret_mount_path = Path(secret_mount_path)
 
         # Configure structured logger
-        self.logger = logging.getLogger(f"syntara.{node_name}")
+        self.logger = logging.getLogger(f"syntara.{step_name}")
         if not self.logger.handlers:
             handler = logging.StreamHandler()
             formatter = logging.Formatter(
@@ -52,7 +52,7 @@ class ExecutionContext:
                     "timestamp": "%(asctime)s",
                     "level": "%(levelname)s",
                     "execution_id": self.execution_id,
-                    "node": self.node_name,
+                    "step": self.step_name,
                     "message": "%(message)s",
                 })
             )
@@ -99,7 +99,7 @@ class ExecutionContext:
         """Log execution start with sanitized inputs.
 
         Args:
-            inputs: Node input parameters (credentials are redacted)
+            inputs: Step input parameters (credentials are redacted)
         """
         sanitized = self._sanitize_inputs(inputs)
         self.logger.info(f"Execution started: {sanitized}")

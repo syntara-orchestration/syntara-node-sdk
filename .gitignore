@@ -47,10 +47,10 @@ htmlcov/
 # uv
 .uv/
 
-# Node SDK specific
+# Step SDK specific
 *.compiled.json
-node-definition.json
-examples/*/node-definition.json
+step-definition.json
+examples/*/step-definition.json
 
 # Databases
 *.db

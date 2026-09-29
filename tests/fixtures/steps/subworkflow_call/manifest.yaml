@@ -1,0 +1,41 @@
+apiVersion: syntara.io/v1alpha1
+kind: StepType
+
+metadata:
+  name: subworkflow_call
+  displayName: Subworkflow Call
+  version: 1.0.0
+  icon: project-diagram
+  description: Parent-side in-process caller for Reference-mode child workflow composition.
+  tags:
+    - category:workflow
+    - execution:in-process
+    - subworkflow:reference-mode
+  author: Syntara Team
+  license: Apache-2.0
+
+spec:
+  category: workflow
+  execution:
+    type: in_process
+    image: null
+    entrypoint: null
+
+  inputs:
+    type: object
+    properties:
+      workflow_id:
+        type: string
+        format: uuid
+        description: Target child workflow selected for Reference-mode invocation.
+      input_variables:
+        type: object
+        description: Values for the required input variables exposed by the child trigger.
+        additionalProperties: true
+    required: [workflow_id]
+
+  outputs:
+    allOf:
+      - $ref: ../../schemas/common-definitions.json#/definitions/StandardOutputWrapper
+
+  executionTimeout: 3660
