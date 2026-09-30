@@ -1,0 +1,112 @@
+apiVersion: syntara.io/v1alpha1
+kind: NodeType
+metadata:
+  name: tfe_list_projects
+  displayName: 'TFE: List Projects'
+  version: 0.1.0
+  icon: cloud
+  description: List Projects through the Terraform Enterprise API.
+  tags:
+  - integration:terraform-enterprise
+  - category:action
+  - domain:project
+  license: Apache-2.0
+spec:
+  category: action
+  execution:
+    type: container
+    image: localhost:5000/syntara/tfe-executor:0.1.0
+    entrypoint: python -m tfe_nodes.runner list_projects
+  declaredRequirements:
+    capabilities:
+    - network-egress
+    - readonly-root-filesystem
+    credentialTypes:
+    - bearer_token
+  credentialSpecification:
+    workloadClassification: action
+  inputs:
+    additionalProperties: false
+    properties:
+      page_number:
+        default: 1
+        minimum: 1
+        title: Page Number
+        type: integer
+      page_size:
+        default: 20
+        maximum: 100
+        minimum: 1
+        title: Page Size
+        type: integer
+      base_url:
+        description: TFE HTTPS origin, optionally ending in /api/v2
+        title: Base Url
+        type: string
+      credential_id:
+        description: Platform credential reference; never the token
+        format: uuid
+        title: Credential Id
+        type: string
+      timeout_seconds:
+        default: 30
+        maximum: 300
+        minimum: 1
+        title: Timeout Seconds
+        type: integer
+      organization:
+        minLength: 1
+        pattern: ^[A-Za-z0-9_-]+$
+        title: Organization
+        type: string
+      name:
+        anyOf:
+        - type: string
+        - type: 'null'
+        default: null
+        title: Name
+    required:
+    - base_url
+    - credential_id
+    - organization
+    title: ListProjects
+    type: object
+  outputs:
+    allOf:
+    - $ref: ../../../schemas/common-definitions.json#/definitions/StandardOutputWrapper
+    - type: object
+      properties:
+        Result:
+          anyOf:
+          - properties:
+              operation:
+                title: Operation
+                type: string
+              data:
+                default: null
+                title: Data
+              related:
+                additionalProperties: true
+                title: Related
+                type: object
+              meta:
+                additionalProperties: true
+                title: Meta
+                type: object
+              http_status:
+                title: Http Status
+                type: integer
+            required:
+            - operation
+            - http_status
+            title: TFEResult
+            type: object
+          - type: 'null'
+  executionTimeout: 900
+  resourceRequirements:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

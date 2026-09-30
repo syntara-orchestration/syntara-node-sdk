@@ -1,0 +1,9 @@
+# Build with the syntara-step-sdk repository root as context.
+FROM docker.io/library/python:3.12-slim
+COPY sdk-python /opt/sdk
+RUN pip install --no-cache-dir /opt/sdk
+COPY nodes/terraform-enterprise/tfe_nodes /app/tfe_nodes
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER 65532:65532
+ENTRYPOINT ["python", "-m", "tfe_nodes.runner"]
