@@ -72,7 +72,7 @@ implementation.
 7. **Immutable output envelope.** `StandardOutputWrapper` (`Result`, `StatusCode`,
    `StatusMessage`, `ErrorMessage`) never changes shape, so template expressions such as
    `${task.Result}` survive step version upgrades.
-8. **Validate at three layers (R10).** SDK tooling validates manifests during development and
+8. **Validate at three layers.** SDK tooling validates manifests during development and
    packaging; the workflow designer validates user inputs against step schemas during workflow
    authoring; base classes validate the invocation before step logic runs. The execution plane
    may additionally validate at its own boundary. No layer substitutes for another.
@@ -105,7 +105,7 @@ permitted. From the platform's perspective a step is a single invocation returni
 
 Granularity is therefore an authoring-guidance concern, not an enforcement mechanism. Deciding
 when to combine operations into one step versus splitting them across steps belongs in the
-authoring guide required by AC-8 / R11.
+authoring guide.
 
 ### Subworkflow Composition
 
@@ -123,7 +123,7 @@ One `manifest.yaml` per step type, following Kubernetes CRD conventions: `apiVer
 `metadata`, `spec`. It supports comments and multi-line strings, validates against Draft-07 via
 `$ref` into `common-definitions.json`, and compiles to `step-definition.json`.
 
-**Plugin layout.** R8 requires every plugin to use the same structure with a root-level plugin
+**Plugin layout.** Plugins have a root-level plugin
 manifest, so the platform can index an uploaded artifact without knowing its internal layout:
 
 ```
@@ -271,7 +271,7 @@ reach a remote registry during editing.
 > requirements below hold; the OCI specifics after them are provisional.
 
 A plugin is built, versioned, published, and stored as a single artifact containing the compiled
-manifests of every step it wraps. Per R8, every plugin uses the same structure with a
+manifests of every step it wraps. Every plugin uses the same structure with a
 **root-level plugin manifest**, so the platform can locate and index step metadata from an
 uploaded artifact without knowing the plugin's internal layout.
 
@@ -354,7 +354,7 @@ developer metadata.
 ## Dispatch and Handoff
 
 Manifests do not declare where a step runs. Placement is the **platform dispatcher's**
-decision and is explicitly out of scope for ANSTRAT-2422. The SDK's obligation under R13 is
+decision and is explicitly out of scope for ANSTRAT-2422. The SDK's obligation is
 narrower: the compiled manifest must carry enough detail for the dispatcher to decide. It
 supplies:
 
@@ -405,16 +405,7 @@ Both placements return the same `StandardOutputWrapper`, so downstream steps do 
 step ran. Placement may change between platform releases, or for the same step under different
 administrative policy, without the manifest changing.
 
-### Runtime Image vs. Plugin Artifact
-
-Two references, easily confused, doing different jobs.
-
-| | `spec.execution.image` | Plugin artifact (`image_ref`) |
-|---|---|---|
-| What it is | The runtime the step executes **in**: an interpreter plus the SDK | The published package the step ships **in** |
-| Contains step code? | No | Yes — every step in the plugin |
-| Scope | Reused across steps and across plugins | One plugin |
-| Set by | The author, in the manifest | The publisher, at `push` time |
+### Runtime Images
 
 At execution the plane starts the runtime image, makes the plugin artifact's code available to
 it, and then needs to know *which* step in that plugin to run. That is
@@ -423,7 +414,7 @@ it, and then needs to know *which* step in that plugin to run. That is
 **Every image-backed step declares a handle**, whether its plugin ships one step or twenty.
 The schema requires `entrypoint` whenever `image` is set, so the runtime loads every step the
 same way and there is no single-step special case to implement or get wrong. A plugin may
-package several steps (R8), and uniform loading is what makes that work without the runtime
+package several steps, and uniform loading is what makes that work without the runtime
 needing to know how many there are.
 
 The handle is a `module:Class` reference, not a shell command, because the step must be invoked
@@ -500,8 +491,6 @@ handling, warm-pool provisioning, and completion signaling.
 > Transport is undecided (SDP Q1); any `stdin` reference left in code is prototype residue.
 
 ## Credentials and Sensitive Data
-
-R5 separates two things the SDK used to conflate.
 
 **Authentication credentials** are never step inputs. A step declares platform-managed
 references by UUID; it must not accept a credential value as an input string. The execution
