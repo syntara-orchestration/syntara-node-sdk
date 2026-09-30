@@ -94,12 +94,29 @@ class {class_name}(TaskStep[{class_name}Input, {class_name}Output]):
 '''
 
 
+def _resolve_within(candidate: Path, base: Path) -> Path:
+    """Resolve ``candidate`` and refuse to escape ``base``.
+
+    Scaffolding paths may arrive from a CLI argument, which in an agentic
+    workflow can be model-generated rather than typed by a person. A value
+    like ``../../etc`` would otherwise write files outside the project, so the
+    resolved target must stay inside the base directory.
+    """
+
+    base = base.resolve()
+    target = (base / candidate).resolve()
+    if target != base and base not in target.parents:
+        raise ValueError(f"path escapes the base directory {base}: {candidate}")
+    return target
+
+
 def init_step(
     path: Path,
     name: str,
     tier: int,
     image: str | None,
     namespace: str = DEFAULT_NAMESPACE,
+    base_dir: Path | None = None,
 ) -> None:
     """Create a Tier 2 script package or Tier 3 image package."""
 
@@ -109,6 +126,7 @@ def init_step(
         raise ValueError("namespace must be lowercase snake_case")
     if tier not in {2, 3}:
         raise ValueError("--tier must be 2 or 3")
+    path = _resolve_within(path, base_dir if base_dir is not None else Path.cwd())
     if path.exists() and any(path.iterdir()):
         raise FileExistsError(f"target directory is not empty: {path}")
     path.mkdir(parents=True, exist_ok=True)
@@ -317,7 +335,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.command == "build":
-            result = build_step(args.manifest, args.output, args.image)
+            output = _resolve_within(args.output, Path.cwd())
+            result = build_step(args.manifest, output, args.image)
             print(result)
         else:
             digest = push_step(

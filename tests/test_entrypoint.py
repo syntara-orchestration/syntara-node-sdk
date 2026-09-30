@@ -63,7 +63,7 @@ def test_fixture_entrypoints_resolve_to_real_classes() -> None:
 def test_scaffolded_step_defines_the_class_its_entrypoint_names(tmp_path: Path) -> None:
     """The scaffold must not emit a handle pointing at a class it never writes."""
 
-    init_step(tmp_path / "my_thing", "my_thing", 3, "quay.io/example/runner:1.0.0")
+    init_step(tmp_path / "my_thing", "my_thing", 3, "quay.io/example/runner:1.0.0", base_dir=tmp_path)
     manifest = yaml.safe_load((tmp_path / "my_thing" / "manifest.yaml").read_text())
 
     entrypoint = manifest["spec"]["execution"]["entrypoint"]
@@ -88,7 +88,7 @@ def test_schema_requires_an_entrypoint_whenever_an_image_is_set() -> None:
 def test_scaffolded_containerfile_launches_via_the_sdk_runner(tmp_path: Path) -> None:
     """The image must be runnable, and must go through BaseStep, not a bare script."""
 
-    init_step(tmp_path / "my_thing", "my_thing", 3, "quay.io/example/runner:1.0.0")
+    init_step(tmp_path / "my_thing", "my_thing", 3, "quay.io/example/runner:1.0.0", base_dir=tmp_path)
     containerfile = (tmp_path / "my_thing" / "Containerfile").read_text()
     manifest = yaml.safe_load((tmp_path / "my_thing" / "manifest.yaml").read_text())
     entrypoint = manifest["spec"]["execution"]["entrypoint"]

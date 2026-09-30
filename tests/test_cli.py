@@ -9,14 +9,14 @@ from syntara_tools.oci_client import OCI_ARTIFACT_TYPE, OCI_MANIFEST_ANNOTATION
 
 def test_init_tier_two_creates_script_package(tmp_path: Path) -> None:
     target = tmp_path / "normalize_payload"
-    init_step(target, "normalize_payload", 2, None)
+    init_step(target, "normalize_payload", 2, None, base_dir=tmp_path)
     assert (target / "main.py").exists()
     assert (target / "manifest.yaml").exists()
 
 
 def test_init_tier_three_creates_dedicated_package(tmp_path: Path) -> None:
     target = tmp_path / "custom_step"
-    init_step(target, "custom_step", 3, "quay.io/example/custom-step:1.0.0")
+    init_step(target, "custom_step", 3, "quay.io/example/custom-step:1.0.0", base_dir=tmp_path)
     assert (target / "Containerfile").exists()
     assert (target / "manifest.yaml").exists()
 
@@ -27,7 +27,7 @@ RUNTIME_IMAGE = "quay.io/example/custom-step:1.0.0"
 
 def test_build_writes_oci_manifest_annotation(tmp_path: Path) -> None:
     source = tmp_path / "custom_step"
-    init_step(source, "custom_step", 3, RUNTIME_IMAGE)
+    init_step(source, "custom_step", 3, RUNTIME_IMAGE, base_dir=tmp_path)
     output = tmp_path / "step-manifest.json"
 
     build_step(source / "manifest.yaml", output, ARTIFACT_REF)
@@ -42,7 +42,7 @@ def test_artifact_ref_does_not_overwrite_runtime_image(tmp_path: Path) -> None:
     """The packaged plugin artifact and the runtime image are distinct refs."""
 
     source = tmp_path / "custom_step"
-    init_step(source, "custom_step", 3, RUNTIME_IMAGE)
+    init_step(source, "custom_step", 3, RUNTIME_IMAGE, base_dir=tmp_path)
     output = tmp_path / "step-manifest.json"
 
     build_step(source / "manifest.yaml", output, ARTIFACT_REF)
@@ -57,7 +57,39 @@ def test_artifact_ref_does_not_overwrite_runtime_image(tmp_path: Path) -> None:
 
 def test_build_requires_an_artifact_reference(tmp_path: Path) -> None:
     source = tmp_path / "custom_step"
-    init_step(source, "custom_step", 3, RUNTIME_IMAGE)
+    init_step(source, "custom_step", 3, RUNTIME_IMAGE, base_dir=tmp_path)
 
     with pytest.raises(ValueError, match="artifact reference"):
         build_step(source / "manifest.yaml", tmp_path / "out.json", "")
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        Path("../escaped"),
+        Path("../../etc/cron.d"),
+        Path("nested/../../escaped"),
+    ],
+)
+def test_init_rejects_paths_escaping_the_base(tmp_path: Path, hostile: Path) -> None:
+    """--path may be model-generated in an agentic workflow; it must stay in-tree."""
+
+    with pytest.raises(ValueError, match="escapes the base directory"):
+        init_step(hostile, "custom_step", 3, RUNTIME_IMAGE, base_dir=tmp_path)
+
+    assert not (tmp_path.parent / "escaped").exists()
+
+
+def test_init_rejects_absolute_path_outside_base(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside_target"
+
+    with pytest.raises(ValueError, match="escapes the base directory"):
+        init_step(outside, "custom_step", 3, RUNTIME_IMAGE, base_dir=tmp_path)
+
+    assert not outside.exists()
+
+
+def test_init_still_allows_a_nested_in_tree_path(tmp_path: Path) -> None:
+    init_step(Path("plugins/custom_step"), "custom_step", 3, RUNTIME_IMAGE, base_dir=tmp_path)
+
+    assert (tmp_path / "plugins" / "custom_step" / "manifest.yaml").exists()
