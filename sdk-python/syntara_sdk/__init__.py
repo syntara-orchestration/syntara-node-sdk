@@ -7,8 +7,9 @@ from syntara_sdk.credentials import (
     ApiKeyCredential,
     BasicAuthCredential,
     BearerTokenCredential,
+    CredentialBinding,
     CredentialMountType,
-    CredentialReference,
+    CredentialRequirement,
 )
 from syntara_sdk.step import (
     ActionStep,
@@ -25,8 +26,9 @@ __all__ = [
     "BaseStep",
     "BasicAuthCredential",
     "BearerTokenCredential",
+    "CredentialBinding",
     "CredentialMountType",
-    "CredentialReference",
+    "CredentialRequirement",
     "ExecutionContext",
     "StandardOutputWrapper",
     "TaskStep",

@@ -156,11 +156,12 @@ ssh-agent bash -c "
 echo "Cloned repository to /workspace/repo"
 ```
 
-Canvas configuration:
+Canvas configuration binds a real credential to the step's declared requirement. The binding lives in
+the workflow definition, not the step manifest:
 ```yaml
-secrets:
-  credential_id: "550e8400-e29b-41d4-a716-446655440000"
-  credential_mount_type: file  # Mounts to /run/secrets/credential
+credential_bindings:
+  - requirement: repo_auth
+    credential_id: "550e8400-e29b-41d4-a716-446655440000"
 ```
 
 ## Network Egress Control

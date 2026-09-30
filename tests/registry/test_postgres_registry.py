@@ -148,10 +148,13 @@ class StepType(RegistryModel, table=True):
 
     __tablename__ = "step_types"
     __table_args__ = (
-        UniqueConstraint("name", "version", name="uq_step_types_name_version"),
+        UniqueConstraint(
+            "namespace", "name", "version", name="uq_step_types_namespace_name_version"
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    namespace: str = Field(index=True)
     name: str = Field(index=True)
     display_name: str
     version: str = Field(default="1.0.0")
@@ -242,6 +245,7 @@ def _palette_summary(row: StepType) -> dict[str, Any]:
     icon = metadata.get("icon") or ICON_BY_CATEGORY.get(str(row.category), "cube")
     return {
         "name": row.name,
+        "namespace": row.namespace,
         "displayName": row.display_name,
         "category": str(row.category),
         "version": row.version,
@@ -255,6 +259,7 @@ def _list_item(row: StepType) -> dict[str, Any]:
     return {
         "id": str(row.id),
         "name": row.name,
+        "namespace": row.namespace,
         "category": str(row.category),
         "enabled": row.enabled,
     }
@@ -265,6 +270,7 @@ def _record(row: StepType) -> dict[str, Any]:
     return {
         "id": str(row.id),
         "name": row.name,
+        "namespace": row.namespace,
         "display_name": row.display_name,
         "category": str(row.category),
         "image_ref": row.image_ref,
@@ -346,6 +352,7 @@ def create_app(engine) -> FastAPI:
         spec = descriptor["spec"]
 
         name = metadata["name"]
+        namespace = metadata["namespace"]
         version = metadata.get("version", "1.0.0")
         # Where the plugin artifact lives. Distinct from spec.execution.image,
         # which names the runtime the step executes in.
@@ -354,10 +361,11 @@ def create_app(engine) -> FastAPI:
         # place, a new version inserts a new row.
         existing = session.exec(
             select(StepType)
+            .where(StepType.namespace == namespace)
             .where(StepType.name == name)
             .where(StepType.version == version)
         ).one_or_none()
-        row = existing or StepType(name=name, version=version)
+        row = existing or StepType(namespace=namespace, name=name, version=version)
         if existing is None:
             session.add(row)
 
@@ -515,6 +523,7 @@ def test_palette_summary_matches_ui_contract(client: TestClient) -> None:
     summary = summaries[0]
     assert set(summary) == {
         "name",
+        "namespace",
         "displayName",
         "category",
         "version",
@@ -542,7 +551,7 @@ def test_list_envelope_matches_documented_contract(client: TestClient) -> None:
     payload = response.json()
     assert payload["meta"] == {"total": 1, "limit": 50, "offset": 0}
     item = payload["data"][0]
-    assert set(item) == {"id", "name", "category", "enabled"}
+    assert set(item) == {"id", "name", "namespace", "category", "enabled"}
     assert item["category"] == "action"
 
     # A non-matching filter yields an empty page, not an error.
@@ -598,6 +607,7 @@ def test_unique_constraint_rejects_duplicate_name_version(engine) -> None:
         for _ in range(2):
             session.add(
                 StepType(
+                    namespace="syntara",
                     name="http_request",
                     display_name="HTTP Request",
                     version="1.0.0",

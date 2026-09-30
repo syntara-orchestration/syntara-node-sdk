@@ -242,10 +242,11 @@ Authentication credentials are never step inputs. Manifests and compiled descrip
 ```yaml
 spec:
   credentialSpecification:
-    credential_references:
-      - credential_id: 550e8400-e29b-41d4-a716-446655440000
-        credential_mount_type: tmpfs_file
-        credential_mount_path: /tmp/api-key
+    credential_requirements:
+      - name: api_auth
+        types: [API Key, Bearer Token]
+        mount_type: tmpfs_file
+        mount_path: /tmp/api-key
 ```
 
 Non-credential sensitive data (PII, business-sensitive fields) *is* supplied as a normal input, flagged `redact: true`. Neither a credential value nor a `redact`-flagged value may appear in `StandardOutputWrapper` fields, workflow variables, error messages, stack traces, execution logs, or persisted state. The platform dispatcher and execution plane enforce this and are the authoritative security boundary; SDK base classes additionally check that a step does not echo a flagged input into its output.

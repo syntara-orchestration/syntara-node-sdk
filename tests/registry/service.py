@@ -44,12 +44,18 @@ class RegistryService:
         # in, so neither is derived from or written over the other.
 
         name = metadata["name"]
+        namespace = metadata["namespace"]
         version = metadata["version"]
         row = self.session.exec(
-            select(StepType).where(StepType.name == name).where(StepType.version == version)
+            select(StepType)
+            .where(StepType.namespace == namespace)
+            .where(StepType.name == name)
+            .where(StepType.version == version)
         ).one_or_none()
         if row is None:
-            row = StepType(name=name, version=version, descriptor=descriptor)
+            row = StepType(
+                namespace=namespace, name=name, version=version, descriptor=descriptor
+            )
             self.session.add(row)
 
         row.display_name = metadata["displayName"]

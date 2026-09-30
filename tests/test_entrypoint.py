@@ -98,3 +98,21 @@ def test_scaffolded_containerfile_launches_via_the_sdk_runner(tmp_path: Path) ->
     assert entrypoint in containerfile
     # A bare script invocation would bypass validation and the redact check.
     assert 'CMD ["python", "/app/main.py"]' not in containerfile
+
+
+def test_manifests_never_carry_credential_identifiers() -> None:
+    """A step type is published before any credential exists, so it cannot name one."""
+
+    validator = jsonschema.Draft7Validator({**SCHEMA, "$ref": "#/definitions/CredentialRequirement"})
+    requirement = {
+        "name": "api_auth",
+        "types": ["API Key"],
+        "credential_id": "550e8400-e29b-41d4-a716-446655440000",
+    }
+    assert list(validator.iter_errors(requirement)), "must reject a credential UUID"
+    assert not list(validator.iter_errors({"name": "api_auth", "types": ["API Key"]}))
+
+
+def test_no_fixture_declares_a_credential_uuid() -> None:
+    for manifest_path in sorted(FIXTURES.glob("*/manifest.yaml")):
+        assert "credential_id" not in manifest_path.read_text(), manifest_path

@@ -69,3 +69,18 @@ def test_oci_registration_rejects_non_step_artifact(session: Session) -> None:
             "quay.io/example/other:1.0.0",
             {"artifactType": "application/octet-stream", "annotations": {}},
         )
+
+
+def test_same_step_name_coexists_across_namespaces(session: Session) -> None:
+    """namespace + name is the identity, so two vendors may both ship http_request."""
+
+    manifest = load_manifest(TESTS_DIR / "fixtures" / "steps" / "http_request" / "manifest.yaml")
+    service = RegistryService(session)
+
+    first = service.register_manifest(manifest)
+    other = {**manifest, "metadata": {**manifest["metadata"], "namespace": "acme"}}
+    second = service.register_manifest(other)
+
+    assert first.id != second.id
+    assert {first.namespace, second.namespace} == {"syntara", "acme"}
+    assert first.name == second.name == "http_request"

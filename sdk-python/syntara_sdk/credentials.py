@@ -20,26 +20,43 @@ class CredentialMountType(StrEnum):
     HEADER = "header"  # HTTP header (for API steps)
 
 
-class CredentialReference(BaseModel):
-    """Reference to a platform-managed credential.
+class CredentialRequirement(BaseModel):
+    """A named credential requirement declared by a step type.
 
-    Stores only the UUID reference - the platform resolves and injects
-    the actual credential value at runtime.
+    Mirrors ``spec.credentialSpecification.credential_requirements``. A step type is
+    published before any credential exists and is installed into many Syntara
+    instances, so it declares *what kind* of credential it needs and how it
+    wants the value presented - never a credential UUID.
     """
 
-    credential_id: str = Field(..., description="UUID of the credential in the vault")
-    credential_mount_type: CredentialMountType = Field(
+    name: str = Field(..., description="Requirement identifier, unique within the step")
+    description: str | None = Field(default=None, description="Shown in the canvas picker")
+    types: list[str] = Field(..., description="Credential types acceptable here")
+    required: bool = Field(default=True, description="Step cannot run without a binding")
+    mount_type: CredentialMountType = Field(
         default=CredentialMountType.ENV,
-        description="How the credential is injected",
+        description="How the step expects the resolved value to be presented",
     )
-    credential_mount_path: str | None = Field(
+    mount_path: str | None = Field(
         default=None,
-        description="Path for file/tmpfs_file mounts",
+        description="Target path for file/tmpfs_file presentation",
     )
-    credential_header_name: str | None = Field(
+    header_name: str | None = Field(
         default=None,
-        description="Header name for header mount type",
+        description="Header name when mount_type is 'header'",
     )
+
+
+class CredentialBinding(BaseModel):
+    """Binds a real credential to one of a step's declared requirements.
+
+    This lives in the *workflow definition*, not in a step type manifest: the
+    UUID is created by an administrator in one Syntara instance and chosen by
+    the workflow author on the canvas.
+    """
+
+    requirement: str = Field(..., description="Name of the CredentialRequirement being filled")
+    credential_id: str = Field(..., description="UUID of the credential in the vault")
 
 
 class BaseCredential(ABC):

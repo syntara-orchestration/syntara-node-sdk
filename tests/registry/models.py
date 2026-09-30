@@ -31,16 +31,22 @@ class StepType(RegistryBase, table=True):
 
     __tablename__ = "step_types"
     __table_args__ = (
-        UniqueConstraint("name", "version", name="uq_step_types_name_version"),
+        # namespace + name is the globally unique step identity (R3/AC-2), so two
+        # vendors can each ship an "http_request" without colliding.
+        UniqueConstraint(
+            "namespace", "name", "version", name="uq_step_types_namespace_name_version"
+        ),
         Index(
             "ix_step_types_canvas_lookup",
             "enabled",
             "category",
+            "namespace",
             "name",
         ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    namespace: str = Field(index=True, max_length=64)
     name: str = Field(index=True, max_length=64)
     display_name: str = Field(max_length=128)
     version: str = Field(default="1.0.0", max_length=64)

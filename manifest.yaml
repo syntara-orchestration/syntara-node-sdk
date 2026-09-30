@@ -76,12 +76,6 @@ spec:
       - readonly-root-filesystem # Runs with read-only root FS
       # Other options: script-execution, tmpfs-mount, privileged-execution
 
-    # Allowed credential types (zero-trust UUID references only)
-    credentialTypes:
-      - api_key
-      - bearer_token
-      # Other options: basic_auth, oauth2, ssh_key, custom
-
     # Minimum platform version
     platformVersion: ">=3.0.0"
 
@@ -158,14 +152,6 @@ spec:
         default: []
 
       # Example: Credential reference (zero-trust UUID only)
-      credential_id:
-        type: string
-        description: Credential UUID reference
-        format: uuid
-        redact: false
-        examples:
-          - 550e8400-e29b-41d4-a716-446655440000
-
     required:
       - url
 
@@ -186,11 +172,16 @@ spec:
   # Execution timeout in seconds (default: 300)
   executionTimeout: 60
 
-  # Authentication credentials. References are UUIDs only -- never credential
-  # values. The platform resolves and injects them out of band; the step never
-  # receives them as inputs.
+  # Authentication credentials. Declare NAMED REQUIREMENTS describing what the step
+  # needs -- never a credential UUID or value. A step type is published before
+  # any credential exists and is installed into many instances, so it cannot
+  # know an ID. The workflow author binds a real credential to each entry when
+  # configuring the step, and that binding lives in the workflow definition.
   credentialSpecification:
-    credential_references:
-      - credential_id: 550e8400-e29b-41d4-a716-446655440000
-        credential_mount_type: header
-        credential_header_name: Authorization
+    credential_requirements:
+      - name: api_auth
+        description: Token used to authenticate outbound requests
+        types: [API Key, Bearer Token]
+        required: true
+        mount_type: header
+        header_name: Authorization

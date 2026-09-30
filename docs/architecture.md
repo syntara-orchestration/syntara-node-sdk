@@ -177,9 +177,6 @@ spec:
       - network-egress
       - readonly-root-filesystem
       - tmpfs-mount
-    credentialTypes:
-      - API Key
-      - Bearer Token
     platformVersion: ">=3.0.0"
 
   schedulingControls:
@@ -236,7 +233,7 @@ graph TB
         EXEC["execution<br/>• image (runtime env)<br/>• entrypoint"]
         INPUTS["inputs<br/>• typed properties<br/>• required / enum / pattern"]
         OUTPUTS["outputs<br/>StandardOutputWrapper"]
-        REQS["declaredRequirements<br/>• capabilities<br/>• credentialTypes<br/>• platformVersion"]
+        REQS["declaredRequirements<br/>• capabilities<br/>• platformVersion"]
         SCHED["schedulingControls<br/>• connectivity<br/>• affinity labels"]
     end
 
@@ -267,7 +264,7 @@ reach a remote registry during editing.
 
 ## Packaging and Registration
 
-> **The packaging format is not decided** (Q6, out of scope here — ANSTRAT-2482). The
+> **The packaging format is not decided** (Q6, out of scope here). The
 > requirements below hold; the OCI specifics after them are provisional.
 
 A plugin is built, versioned, published, and stored as a single artifact containing the compiled
@@ -354,7 +351,7 @@ developer metadata.
 ## Dispatch and Handoff
 
 Manifests do not declare where a step runs. Placement is the **platform dispatcher's**
-decision and is explicitly out of scope for ANSTRAT-2422. The SDK's obligation is
+decision and is explicitly out of scope. The SDK's obligation is
 narrower: the compiled manifest must carry enough detail for the dispatcher to decide. It
 supplies:
 
@@ -462,7 +459,7 @@ graph LR
 |---|---|
 | `image_ref` | The registered plugin artifact the descriptor was extracted from. Authoritative for the step's contract. |
 | `execution.image` + `entrypoint` | The runtime image the step executes in, and the `module:Class` handle identifying which step the runner should load. |
-| Abstract task invocation | Script, `inputs` (including `redact`-flagged values), credentials resolved from `credential_references`, and `workflow_context`. |
+| Abstract task invocation | Script, `inputs` (including `redact`-flagged values), credentials resolved from the workflow's credential bindings, and `workflow_context`. |
 | Selection metadata | `declaredRequirements`, `resourceRequirements`, `executionTimeout` — enough for the platform to validate and route. |
 | Registration controls | Administrator-owned `sandbox_required`, `egress_policy`, `worker_pool_selector`. |
 
@@ -492,29 +489,45 @@ handling, warm-pool provisioning, and completion signaling.
 
 ## Credentials and Sensitive Data
 
-**Authentication credentials** are never step inputs. A step declares platform-managed
-references by UUID; it must not accept a credential value as an input string. The execution
-plane resolves the reference and supplies the value out of band, so the credential never
-appears in the manifest, the descriptor, or the `inputs` map.
+**Authentication credentials** are never step inputs, and never identified in the manifest. A
+step type is published before any credential exists and is installed into many Syntara
+instances, so it cannot know a credential UUID. It declares **named requirements**: what kind of
+credential it needs and how it wants the value presented.
 
 ```yaml
 spec:
   credentialSpecification:
-    credential_references:
-      - credential_id: 550e8400-e29b-41d4-a716-446655440000
-        credential_mount_type: tmpfs_file
-        credential_mount_path: /tmp/api-key
+    credential_requirements:
+      - name: api_auth
+        description: Token for the target API
+        types: [API Key, Bearer Token]
+        required: true
+        mount_type: tmpfs_file
+        mount_path: /tmp/api-key
 ```
 
+A credential UUID enters the picture later, and never in anything the SDK owns:
+
+| Moment | What happens | Where the UUID lives |
+|---|---|---|
+| **Authoring** (step) | Author declares `credential_requirements` | nowhere — no credential exists yet |
+| **Authoring** (workflow) | Workflow author picks a credential on the canvas and **binds** it to a requirement | the workflow definition |
+| **Deployment** | Platform validates the credential exists and the workflow owner may use it | unchanged |
+| **Dispatch** | Platform authorizes against the invoking actor, resolves the UUID to a value, hands it to the execution plane | resolved and discarded |
+
+Binding at workflow-authoring time is what lets two steps of the same type use different
+credentials — two `http_request` steps hitting two APIs — which a step-type-level or
+registration-level binding could not express.
+
 **Non-credential sensitive data** — PII, business-sensitive fields — *is* a normal input,
-flagged `redact: true`. The step receives the value
-because it needs it; the flag governs where that value is allowed to appear afterwards.
+flagged `redact: true`. The step receives the value because it needs it; the flag governs where
+that value is allowed to appear afterwards.
 
 | | Authentication credentials | Sensitive non-credential data |
 |---|---|---|
-| Declared as | `credential_references` (UUID) | an input with `redact: true` |
+| Declared as | a named `credential_requirements` entry | an input with `redact: true` |
 | Reaches the step | resolved out of band by the execution plane | in the `inputs` map |
-| In the descriptor | UUID only | schema flag only, never a value |
+| In the step descriptor | the requirement only — never a UUID or value | schema flag only, never a value |
 
 ### The Non-Disclosure Guarantee
 
@@ -602,8 +615,8 @@ orchestrator and canvas consume the compiled artifact rather than the source man
 | `StepInputs` | Draft-07 input object | `{properties, required}` |
 | `InputParameter` | One input, including sensitivity | `redact: true` |
 | `StandardOutputWrapper` | Immutable output contract | `{Result, StatusCode, StatusMessage, ErrorMessage}` |
-| `CredentialSpecification` | Step credential access boundary | `{credential_references}` |
-| `CredentialReference` / `CredentialReferenceList` | UUID-based credential reference | `{credential_id, credential_mount_type, credential_mount_path}` |
+| `CredentialSpecification` | Step credential requirements | `{credential_requirements}` |
+| `CredentialRequirement` / `CredentialRequirementList` | Named credential requirement; no UUID | `{name, types, required, mount_type, mount_path, header_name}` |
 | `DependencyDeclaration` | Language-specific dependency declaration | per-runtime package list |
 | `ResourceRequirements` | Kubernetes resource shape | `{limits: {cpu, memory}, requests: {cpu, memory}}` |
 | `ExecutionTimeout` | Total step timeout in seconds | integer |
@@ -649,7 +662,7 @@ standard output envelope — but not these class names.
 `BaseStep[TInput, TOutput]` is the base execution contract, specialized as `ActionStep`,
 `TaskStep`, `WorkflowStep`, and `TriggerStep`. Typed inputs and outputs are Pydantic models.
 `ExecutionContext` carries workflow context to step logic without coupling it to a worker or
-transport, and `CredentialReference` / `BaseCredential` model the reference-only credential
+transport, and `CredentialRequirement` / `CredentialBinding` / `BaseCredential` model the credential
 contract.
 
 ## Reference Implementations

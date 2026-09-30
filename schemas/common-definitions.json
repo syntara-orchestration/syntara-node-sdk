@@ -3,7 +3,6 @@
   "$id": "https://syntara.io/schemas/common-definitions.json",
   "title": "Syntara Plugin SDK - Common Definitions",
   "description": "Shared reusable definitions for the Syntara Automation Orchestrator Plugin SDK. These components are referenced across all step types to ensure strict backwards compatibility and consistent runtime behavior.",
-
   "definitions": {
     "StepTypeManifest": {
       "type": "object",
@@ -30,7 +29,12 @@
               "pattern": "^[a-z][a-z0-9_]*$",
               "minLength": 1,
               "maxLength": 64,
-              "examples": ["http_request", "script_executor", "subworkflow_call", "subworkflow_trigger"]
+              "examples": [
+                "http_request",
+                "script_executor",
+                "subworkflow_call",
+                "subworkflow_trigger"
+              ]
             },
             "namespace": {
               "type": "string",
@@ -38,21 +42,34 @@
               "pattern": "^[a-z][a-z0-9_]*$",
               "minLength": 1,
               "maxLength": 64,
-              "examples": ["syntara", "terraform", "github"]
+              "examples": [
+                "syntara",
+                "terraform",
+                "github"
+              ]
             },
             "displayName": {
               "type": "string",
               "description": "Human-readable step name displayed in the UI palette and canvas.",
               "minLength": 1,
               "maxLength": 128,
-              "examples": ["HTTP Request", "Script Executor", "Subworkflow Call", "Subworkflow Trigger"]
+              "examples": [
+                "HTTP Request",
+                "Script Executor",
+                "Subworkflow Call",
+                "Subworkflow Trigger"
+              ]
             },
             "version": {
               "type": "string",
               "description": "Semantic version of this step type.",
               "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$",
               "default": "1.0.0",
-              "examples": ["1.0.0", "2.1.3", "1.0.0-beta.1"]
+              "examples": [
+                "1.0.0",
+                "2.1.3",
+                "1.0.0-beta.1"
+              ]
             },
             "icon": {
               "$ref": "#/definitions/StepPaletteIcon"
@@ -71,17 +88,30 @@
                 "pattern": "^[a-z0-9-]+:[a-z0-9-]+$"
               },
               "uniqueItems": true,
-              "examples": [["integration:rest-api", "network:external", "category:action"]]
+              "examples": [
+                [
+                  "integration:rest-api",
+                  "network:external",
+                  "category:action"
+                ]
+              ]
             },
             "author": {
               "type": "string",
               "description": "Step author or organization.",
-              "examples": ["Syntara Team", "Community"]
+              "examples": [
+                "Syntara Team",
+                "Community"
+              ]
             },
             "license": {
               "type": "string",
               "description": "Software license identifier.",
-              "examples": ["MIT", "Apache-2.0", "GPL-3.0"]
+              "examples": [
+                "MIT",
+                "Apache-2.0",
+                "GPL-3.0"
+              ]
             },
             "documentationUrl": {
               "type": "string",
@@ -89,7 +119,13 @@
               "description": "Optional link to the step's detailed documentation."
             }
           },
-          "required": ["name", "namespace", "displayName", "version", "description"],
+          "required": [
+            "name",
+            "namespace",
+            "displayName",
+            "version",
+            "description"
+          ],
           "additionalProperties": false
         },
         "spec": {
@@ -104,27 +140,52 @@
               "description": "Specifications for the runtime environment",
               "properties": {
                 "image": {
-                  "type": ["string", "null"],
+                  "type": [
+                    "string",
+                    "null"
+                  ],
                   "description": "Runtime environment the execution plane runs the step in. It holds an interpreter and the SDK, not step code -- the step implementations live in the plugin artifact. Usually a generic runner reused across steps and plugins; a step with unusual dependencies may warrant its own. Null when the step requires no runtime image.",
                   "pattern": "^(?:[a-zA-Z0-9][a-zA-Z0-9.-]*(?::[0-9]+)?/)?[a-zA-Z0-9][a-zA-Z0-9._/-]*:[a-zA-Z0-9._-]+$",
-                  "examples": ["quay.io/syntara/python-executor:1.0.0", "quay.io/syntara/script-python-executor:latest", "localhost:5000/syntara/runners/node22:1.0.0"]
+                  "examples": [
+                    "quay.io/syntara/python-executor:1.0.0",
+                    "quay.io/syntara/script-python-executor:latest",
+                    "localhost:5000/syntara/runners/node22:1.0.0"
+                  ]
                 },
                 "entrypoint": {
-                  "type": ["string", "null"],
+                  "type": [
+                    "string",
+                    "null"
+                  ],
                   "description": "Step handle in 'module.path:ClassName' form, resolving to this step's BaseStep subclass within the plugin artifact. A plugin may package several steps (R8), so the runtime needs this to know which one to load and invoke through the SDK base class. This is not a shell command: running the step as a subprocess would bypass the base-class input validation and redaction checks. Null when the runtime needs no handle.",
                   "pattern": "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$",
-                  "examples": ["main:HttpRequestStep", "src.main:GithubIssueStep"]
+                  "examples": [
+                    "main:HttpRequestStep",
+                    "src.main:GithubIssueStep"
+                  ]
                 }
               },
               "allOf": [
                 {
                   "if": {
-                    "properties": { "image": { "type": "string" } },
-                    "required": ["image"]
+                    "properties": {
+                      "image": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "image"
+                    ]
                   },
                   "then": {
-                    "required": ["entrypoint"],
-                    "properties": { "entrypoint": { "type": "string" } }
+                    "required": [
+                      "entrypoint"
+                    ],
+                    "properties": {
+                      "entrypoint": {
+                        "type": "string"
+                      }
+                    }
                   }
                 }
               ],
@@ -153,19 +214,14 @@
                   },
                   "uniqueItems": true
                 },
-                "credentialTypes": {
-                  "type": "array",
-                  "description": "Types of credentials this step can consume.",
-                  "items": {
-                    "type": "string"
-                  },
-                  "examples": [["API Key", "Bearer Token", "SSH Key"]]
-                },
                 "platformVersion": {
                   "type": "string",
                   "description": "Minimum required platform version (SemVer range).",
                   "pattern": "^(>=|\\^|~|\\*)?\\d+(\\.\\d+)?(\\.\\d+)?(-[a-zA-Z0-9.-]+)?(\\s*\\|\\|\\s*(>=|\\^|~|\\*)?\\d+(\\.\\d+)?(\\.\\d+)?(-[a-zA-Z0-9.-]+)?)*$",
-                  "examples": [">=3.0.0", "^3.1.0"]
+                  "examples": [
+                    ">=3.0.0",
+                    "^3.1.0"
+                  ]
                 }
               },
               "additionalProperties": false
@@ -223,14 +279,23 @@
               "additionalProperties": false
             }
           },
-          "required": ["category", "execution", "inputs", "outputs"],
+          "required": [
+            "category",
+            "execution",
+            "inputs",
+            "outputs"
+          ],
           "additionalProperties": false
         }
       },
-      "required": ["apiVersion", "kind", "metadata", "spec"],
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
       "additionalProperties": false
     },
-
     "StandardOutputWrapper": {
       "type": "object",
       "title": "Standard Output Wrapper",
@@ -239,10 +304,18 @@
         "Result": {
           "description": "Primary task return payload. Type varies by step implementation - may be an object (e.g., {stdout, stderr, exit_code}), string, array, or null. This is the data referenced in downstream workflow template expressions.",
           "oneOf": [
-            { "type": "object" },
-            { "type": "string" },
-            { "type": "array" },
-            { "type": "null" }
+            {
+              "type": "object"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "StatusCode": {
@@ -265,10 +338,14 @@
           "maxLength": 10000
         }
       },
-      "required": ["Result", "StatusCode", "StatusMessage", "ErrorMessage"],
+      "required": [
+        "Result",
+        "StatusCode",
+        "StatusMessage",
+        "ErrorMessage"
+      ],
       "additionalProperties": false
     },
-
     "DependencyDeclaration": {
       "type": "object",
       "title": "Dependency Declaration",
@@ -278,7 +355,12 @@
           "type": "string",
           "description": "SemVer-compatible version range specifying the minimum required Syntara platform engine version. Examples: '>=3.0.0', '^3.1.0', '3.x'. The scheduler rejects steps requiring newer platform capabilities than the deployed version.",
           "pattern": "^(>=|\\^|~|\\*)?\\d+(\\.\\d+)?(\\.\\d+)?(-[a-zA-Z0-9.-]+)?(\\s*\\|\\|\\s*(>=|\\^|~|\\*)?\\d+(\\.\\d+)?(\\.\\d+)?(-[a-zA-Z0-9.-]+)?)*$",
-          "examples": [">=3.0.0", "^3.1.0", "3.x", ">=3.0.0 || >=4.0.0"]
+          "examples": [
+            ">=3.0.0",
+            "^3.1.0",
+            "3.x",
+            ">=3.0.0 || >=4.0.0"
+          ]
         },
         "capabilities": {
           "type": "array",
@@ -310,16 +392,26 @@
                 "type": "string",
                 "description": "Fully-qualified Ansible Galaxy collection name in namespace.collection format.",
                 "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$",
-                "examples": ["community.general", "ansible.posix", "community.crypto"]
+                "examples": [
+                  "community.general",
+                  "ansible.posix",
+                  "community.crypto"
+                ]
               },
               "version": {
                 "type": "string",
                 "description": "SemVer version constraint for the collection.",
                 "pattern": "^(>=|\\^|~|\\*)?\\d+(\\.\\d+)?(\\.\\d+)?(-[a-zA-Z0-9.-]+)?$",
-                "examples": [">=8.0.0", "^8.5.0"]
+                "examples": [
+                  ">=8.0.0",
+                  "^8.5.0"
+                ]
               }
             },
-            "required": ["name", "version"],
+            "required": [
+              "name",
+              "version"
+            ],
             "additionalProperties": false
           },
           "default": []
@@ -334,16 +426,25 @@
                 "type": "string",
                 "description": "Package name of the required extension, following npm scoping conventions for Community Steps.",
                 "pattern": "^(@[a-z0-9-]+/)?[a-z0-9-]+$",
-                "examples": ["@syntara-community/base-credential-resolver", "ssh-connector"]
+                "examples": [
+                  "@syntara-community/base-credential-resolver",
+                  "ssh-connector"
+                ]
               },
               "version": {
                 "type": "string",
                 "description": "SemVer version constraint for the extension.",
                 "pattern": "^(>=|\\^|~|\\*)?\\d+(\\.\\d+)?(\\.\\d+)?(-[a-zA-Z0-9.-]+)?$",
-                "examples": [">=1.2.0", "^1.0.0"]
+                "examples": [
+                  ">=1.2.0",
+                  "^1.0.0"
+                ]
               }
             },
-            "required": ["name", "version"],
+            "required": [
+              "name",
+              "version"
+            ],
             "additionalProperties": false
           },
           "default": []
@@ -351,7 +452,6 @@
       },
       "additionalProperties": false
     },
-
     "ResourceRequirements": {
       "type": "object",
       "title": "Resource Requirements",
@@ -366,17 +466,32 @@
               "description": "CPU limit in Kubernetes quantity format. Integer values = cores (e.g., '2' = 2 cores). Decimal/suffix = millicores (e.g., '500m' = 0.5 cores). Typical range: 100m-4.",
               "pattern": "^\\d+(\\.\\d+)?m?$",
               "default": "1",
-              "examples": ["100m", "0.5", "1", "2", "4"]
+              "examples": [
+                "100m",
+                "0.5",
+                "1",
+                "2",
+                "4"
+              ]
             },
             "memory": {
               "type": "string",
               "description": "Memory limit in Kubernetes quantity format. Supports Ki, Mi, Gi suffixes (binary, base-1024). Typical range: 128Mi-8Gi.",
               "pattern": "^\\d+(Ki|Mi|Gi)?$",
               "default": "512Mi",
-              "examples": ["128Mi", "256Mi", "512Mi", "1Gi", "2Gi"]
+              "examples": [
+                "128Mi",
+                "256Mi",
+                "512Mi",
+                "1Gi",
+                "2Gi"
+              ]
             }
           },
-          "required": ["cpu", "memory"],
+          "required": [
+            "cpu",
+            "memory"
+          ],
           "additionalProperties": false
         },
         "requests": {
@@ -388,24 +503,39 @@
               "description": "CPU request in Kubernetes quantity format. Should typically match limits for compute-intensive tasks to avoid throttling.",
               "pattern": "^\\d+(\\.\\d+)?m?$",
               "default": "100m",
-              "examples": ["100m", "0.5", "1", "2"]
+              "examples": [
+                "100m",
+                "0.5",
+                "1",
+                "2"
+              ]
             },
             "memory": {
               "type": "string",
-              "description": "Memory request in Kubernetes quantity format. It should typically be 80–100% of the limit to balance predictable capacity with controlled bursting.",
+              "description": "Memory request in Kubernetes quantity format. It should typically be 80\u2013100% of the limit to balance predictable capacity with controlled bursting.",
               "pattern": "^\\d+(Ki|Mi|Gi)?$",
               "default": "256Mi",
-              "examples": ["128Mi", "256Mi", "512Mi", "1Gi"]
+              "examples": [
+                "128Mi",
+                "256Mi",
+                "512Mi",
+                "1Gi"
+              ]
             }
           },
-          "required": ["cpu", "memory"],
+          "required": [
+            "cpu",
+            "memory"
+          ],
           "additionalProperties": false
         }
       },
-      "required": ["limits", "requests"],
+      "required": [
+        "limits",
+        "requests"
+      ],
       "additionalProperties": false
     },
-
     "ExecutionTimeout": {
       "type": "integer",
       "title": "Execution Timeout",
@@ -413,9 +543,14 @@
       "minimum": 1,
       "maximum": 86400,
       "default": 300,
-      "examples": [60, 300, 600, 1800, 3600]
+      "examples": [
+        60,
+        300,
+        600,
+        1800,
+        3600
+      ]
     },
-
     "SchedulingControls": {
       "type": "object",
       "title": "Scheduling Controls",
@@ -427,7 +562,12 @@
           "items": {
             "type": "string",
             "pattern": "^[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)?(=[a-zA-Z0-9._-]+)?$",
-            "examples": ["gpu=true", "zone=us-east-1a", "workload=high-memory", "node.kubernetes.io/instance-type=m5.2xlarge"]
+            "examples": [
+              "gpu=true",
+              "zone=us-east-1a",
+              "workload=high-memory",
+              "node.kubernetes.io/instance-type=m5.2xlarge"
+            ]
           },
           "default": []
         },
@@ -440,7 +580,12 @@
                 "type": "string",
                 "description": "Destination hostname, FQDN, IPv4 address, or IPv4 CIDR block. Egress is permitted on all ports unless narrowed via the object form.",
                 "pattern": "^(\\*\\.)?[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*(/\\d{1,2})?$",
-                "examples": ["api.github.com", "registry.npmjs.org", "192.168.1.100", "10.0.0.0/8"]
+                "examples": [
+                  "api.github.com",
+                  "registry.npmjs.org",
+                  "192.168.1.100",
+                  "10.0.0.0/8"
+                ]
               },
               {
                 "type": "object",
@@ -450,7 +595,10 @@
                     "type": "string",
                     "description": "Target hostname, FQDN, IPv4 address, or IPv4 CIDR block.",
                     "minLength": 1,
-                    "examples": ["oauth2.googleapis.com", "10.0.0.0/8"]
+                    "examples": [
+                      "oauth2.googleapis.com",
+                      "10.0.0.0/8"
+                    ]
                   },
                   "ports": {
                     "type": "array",
@@ -458,16 +606,32 @@
                     "items": {
                       "type": "object",
                       "properties": {
-                        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-                        "protocol": { "type": "string", "enum": ["TCP", "UDP"], "default": "TCP" }
+                        "port": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 65535
+                        },
+                        "protocol": {
+                          "type": "string",
+                          "enum": [
+                            "TCP",
+                            "UDP"
+                          ],
+                          "default": "TCP"
+                        }
                       },
-                      "required": ["port"],
+                      "required": [
+                        "port"
+                      ],
                       "additionalProperties": false
                     },
                     "minItems": 1
                   }
                 },
-                "required": ["host", "ports"],
+                "required": [
+                  "host",
+                  "ports"
+                ],
                 "additionalProperties": false
               }
             ]
@@ -477,81 +641,46 @@
       },
       "additionalProperties": false
     },
-
     "StepCategory": {
       "type": "string",
       "title": "Step Category",
       "description": "Platform-wide step taxonomy classification. Categorizes steps by their architectural role. Exactly four categories exist: 'action' (domain and API integrations), 'task' (atomic compute and script executors), 'workflow' (in-memory control-plane logic, including the parent-side subworkflow_call), and 'trigger' (event entry points, including the child-side subworkflow_trigger). Used for UI organization, routing decisions, and capability validation.",
-      "enum": ["action", "task", "workflow", "trigger"],
-      "examples": ["action", "task", "workflow", "trigger"]
+      "enum": [
+        "action",
+        "task",
+        "workflow",
+        "trigger"
+      ],
+      "examples": [
+        "action",
+        "task",
+        "workflow",
+        "trigger"
+      ]
     },
-
     "StepPaletteIcon": {
       "type": "string",
       "title": "Step Palette Icon",
       "description": "Optional glyph shown beside the step in the React Flow visual builder's drag-and-drop palette drawer, interpreted as a PatternFly / Font Awesome icon name. Authored in the manifest and carried through compilation into the step-definition.json descriptor so the palette can render it without a frontend deployment. When omitted, the UI falls back to a per-category default icon.",
       "pattern": "^[a-z0-9-]+$",
-      "examples": ["globe", "terminal", "bolt", "project-diagram"]
+      "examples": [
+        "globe",
+        "terminal",
+        "bolt",
+        "project-diagram"
+      ]
     },
-
     "CredentialSpecification": {
       "type": "object",
       "title": "Credential Specification",
-      "description": "Step-level credential access specification. Credential references contain only UUIDs and presentation hints; the platform authorizes each request at dispatch time.",
+      "description": "Step-level credential requirements. Declares named requirements, not credential identities: the manifest never contains a credential UUID or value. Workflow authors bind real credentials to these requirements, and the platform authorizes each binding at dispatch time.",
       "properties": {
-        "credential_references": {
-          "$ref": "#/definitions/CredentialReferenceList"
+        "credential_requirements": {
+          "$ref": "#/definitions/CredentialRequirementList"
         }
       },
       "additionalProperties": false
     },
-
-    "CredentialReference": {
-      "type": "object",
-      "title": "Credential Reference",
-      "description": "Declarative, UUID-based reference to a platform-managed credential. Only the abstract credential_id is persisted in the manifest and compiled descriptor. Steps must never accept credential values as direct input strings. The execution plane resolves the reference and supplies the value out of band; injection, scrubbing, and persistence are execution-plane-owned.",
-      "properties": {
-        "credential_id": {
-          "type": "string",
-          "format": "uuid",
-          "description": "UUID of the credential stored in the platform's encrypted vault. This UUID is the sole secret abstraction: no plaintext secret, key, or token may appear in a step definition. Validated at workflow deployment time to ensure the credential exists and is accessible to the workflow owner.",
-          "examples": ["550e8400-e29b-41d4-a716-446655440000"]
-        },
-        "credential_mount_type": {
-          "type": "string",
-          "description": "Optional requested presentation hint for a resolved credential. 'env', 'file', 'tmpfs_file', and 'header' identify the form the step expects; the execution plane owns whether and how that hint is honored when constructing the runtime.",
-          "enum": ["env", "file", "tmpfs_file", "header"],
-          "default": "env"
-        },
-        "credential_mount_path": {
-          "type": "string",
-          "description": "Optional requested target path for 'file' and 'tmpfs_file' credential presentation. The execution plane owns whether and how this path is made available. Required in the manifest when 'tmpfs_file' is selected; ignored for 'env' and 'header' presentations.",
-          "pattern": "^/[a-zA-Z0-9/_.-]+$",
-          "examples": ["/tmp/id_rsa", "/run/secrets/vault-password", "/run/secrets/ssh-key"]
-        },
-        "credential_header_name": {
-          "type": "string",
-          "description": "HTTP header name requested when credential_mount_type='header' (e.g. 'Authorization', 'X-API-Key'). Ignored for all other presentation hints; the execution plane owns the runtime injection.",
-          "pattern": "^[A-Za-z0-9-]+$",
-          "examples": ["Authorization", "X-API-Key"]
-        }
-      },
-      "required": ["credential_id"],
-      "additionalProperties": false,
-      "dependencies": {
-        "credential_mount_path": ["credential_mount_type"],
-        "credential_header_name": ["credential_mount_type"]
-      }
-    },
-
-    "CredentialReferenceList": {
-      "type": "array",
-      "title": "Credential Reference List",
-      "description": "An ordered list of CredentialReference entries, allowing a single step to declare multiple simultaneous credentials (for example an SSH key, a cloud API token, and a vault password), each with its own mount type, mount path, and authorization scope.",
-      "items": { "$ref": "#/definitions/CredentialReference" },
-      "default": []
-    },
-
     "InputParameter": {
       "type": "object",
       "title": "Input Parameter Definition",
@@ -565,7 +694,6 @@
       },
       "additionalProperties": true
     },
-
     "StepRegistrationPolicy": {
       "type": "object",
       "title": "Administrative Step Registration Policy",
@@ -577,7 +705,11 @@
         },
         "egress_policy": {
           "type": "string",
-          "enum": ["none", "restricted", "unrestricted"],
+          "enum": [
+            "none",
+            "restricted",
+            "unrestricted"
+          ],
           "description": "Administrative network egress mode applied to the selected worker pool."
         },
         "worker_pool_selector": {
@@ -589,10 +721,13 @@
           }
         }
       },
-      "required": ["sandbox_required", "egress_policy", "worker_pool_selector"],
+      "required": [
+        "sandbox_required",
+        "egress_policy",
+        "worker_pool_selector"
+      ],
       "additionalProperties": false
     },
-
     "StepInputs": {
       "type": "object",
       "title": "Step Inputs",
@@ -600,7 +735,7 @@
       "properties": {
         "properties": {
           "type": "object",
-          "description": "Map of input name to its JSON Schema definition. A value may itself be a nested object, a typed array, or a oneOf/anyOf union — not only a flat primitive.",
+          "description": "Map of input name to its JSON Schema definition. A value may itself be a nested object, a typed array, or a oneOf/anyOf union \u2014 not only a flat primitive.",
           "additionalProperties": {
             "$ref": "#/definitions/InputParameter"
           }
@@ -611,13 +746,121 @@
         },
         "required": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "uniqueItems": true,
           "default": []
         }
       },
-      "required": ["properties"],
+      "required": [
+        "properties"
+      ],
       "additionalProperties": true
+    },
+    "CredentialRequirement": {
+      "type": "object",
+      "title": "Credential Requirement",
+      "description": "A named credential requirement declared by a step type. A step type manifest is authored before any credential exists and is installed into many Syntara instances, so it cannot name a credential UUID. It declares what kind of credential it needs and how it wants the value presented; the workflow author binds an actual platform-managed credential to it when configuring the step, and that binding lives in the workflow definition, not here.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Requirement identifier, unique within the step. The workflow definition binds a credential to this name.",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 64,
+          "examples": [
+            "api_auth",
+            "ssh_key"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable purpose, shown in the canvas when the workflow author picks a credential.",
+          "maxLength": 500
+        },
+        "types": {
+          "type": "array",
+          "description": "Credential types acceptable here. The canvas filters the picker to these, and the platform rejects a binding outside the list.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "examples": [
+            [
+              "API Key",
+              "Bearer Token"
+            ]
+          ]
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether the step cannot run without a credential bound to this requirement.",
+          "default": true
+        },
+        "mount_type": {
+          "type": "string",
+          "description": "How the step expects the resolved value to be presented. The execution plane owns whether and how the hint is honored.",
+          "enum": [
+            "env",
+            "file",
+            "tmpfs_file",
+            "header"
+          ],
+          "default": "env"
+        },
+        "mount_path": {
+          "type": "string",
+          "description": "Requested target path for 'file' and 'tmpfs_file' presentation. Required when mount_type is 'tmpfs_file'; ignored otherwise.",
+          "pattern": "^/[a-zA-Z0-9/_.-]+$",
+          "examples": [
+            "/tmp/id_rsa",
+            "/run/secrets/vault-password"
+          ]
+        },
+        "header_name": {
+          "type": "string",
+          "description": "HTTP header name requested when mount_type is 'header'. Ignored otherwise.",
+          "pattern": "^[A-Za-z0-9-]+$",
+          "examples": [
+            "Authorization",
+            "X-API-Key"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "types"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mount_type": {
+                "const": "tmpfs_file"
+              }
+            },
+            "required": [
+              "mount_type"
+            ]
+          },
+          "then": {
+            "required": [
+              "mount_path"
+            ]
+          }
+        }
+      ]
+    },
+    "CredentialRequirementList": {
+      "type": "array",
+      "title": "Credential Requirement List",
+      "description": "Credential requirements a step declares, allowing several simultaneous credentials (an SSH key, a cloud token, a vault password), each with its own type constraint and presentation.",
+      "items": {
+        "$ref": "#/definitions/CredentialRequirement"
+      },
+      "default": []
     }
   }
 }
