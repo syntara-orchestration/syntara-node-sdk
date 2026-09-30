@@ -1,4 +1,4 @@
-"""Syntara Step SDK - Runtime framework for implementing workflow steps."""
+"""Syntara Plugin SDK - Runtime framework for implementing workflow steps."""
 
 __version__ = "0.1.0"
 

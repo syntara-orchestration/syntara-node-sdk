@@ -186,7 +186,7 @@ The implementation is **100% compliant** with the K8s CRD manifest:
 ## Next Steps
 
 1. **Add credential injection** - Implement BearerTokenCredential or ApiKeyCredential for authenticated requests
-2. **Container packaging** - Build Docker image at `registry.syntara.io/steps/http-request:1.0.0`
+2. **Runtime image** - Runs in the shared `quay.io/syntara/http-request-executor:latest` runner
 3. **Integration testing** - Test against real Syntara orchestrator
 4. **Deploy to registry** - Register via `POST /api/v1/step-types`
 

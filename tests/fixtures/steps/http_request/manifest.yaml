@@ -7,6 +7,7 @@ kind: StepType
 
 metadata:
   name: http_request
+  namespace: syntara
   displayName: HTTP Request
   version: 1.0.0
   icon: globe  # React Flow palette glyph; see StepPaletteIcon in common-definitions.json
@@ -23,8 +24,8 @@ metadata:
 spec:
   category: action  # action | task | workflow | trigger
   execution:
-    type: container  # container | in_process
-    image: registry.syntara.io/steps/http-request:1.0.0
+    image: quay.io/syntara/http-request-executor:latest
+    entrypoint: src.main:HttpRequestStep
 
   # Declared capability and credential requirements
   declaredRequirements:
@@ -173,7 +174,6 @@ spec:
   # Zero-trust: the manifest stores only abstract UUID references (credential_id).
   # Runtime injection is execution-plane-owned.
   credentialSpecification:
-    workloadClassification: action
     credential_references: []
 
   # Output schema - references AND extends StandardOutputWrapper from

@@ -34,7 +34,7 @@ def test_register_manifest_persists_dispatch_columns(session: Session) -> None:
     manifest = load_manifest(TESTS_DIR / "fixtures" / "steps" / "subworkflow_trigger" / "manifest.yaml")
     row = RegistryService(session).register_manifest(manifest)
 
-    assert row.execution_type == "in_process"
+    assert row.category == "trigger"
     assert row.image_ref is None
     assert row.descriptor["spec"]["execution"]["image"] is None
 
@@ -55,7 +55,7 @@ def test_oci_registration_reads_standard_artifact_annotation(session: Session) -
     row = RegistryService(session).register_oci_manifest(
         "quay.io/example/script:1.0.0", oci_manifest
     )
-    assert row.execution_type == "container"
+    assert row.category == "task"
     assert row.image_ref == "quay.io/example/script:1.0.0"
 
 

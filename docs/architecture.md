@@ -1,145 +1,151 @@
-# Syntara Step SDK Architecture
+# Syntara Plugin SDK Architecture
 
-The Syntara Step SDK is a schema-driven framework for authoring, packaging, and registering custom automation steps. This document defines the step taxonomy, authoring format, platform integration assumptions, and execution placement delegation.
+The Syntara Plugin SDK is a schema-driven framework for authoring, validating, and registering
+custom automation steps. This document defines the step taxonomy, the authoring format, the
+registration contract, and the handoff the SDK makes to the platform.
 
-## Architecture Principles and Boundaries
+> All JSON and YAML payloads in this document are illustrative. They do not define API
+> endpoints, storage schemas, or ORM models.
 
-The following principles are normative for the SDK-owned contracts. The SDK owns schemas, manifests, compiled descriptors, declared requirements, registration metadata, and the abstract task-invocation payload. The SDK and execution-plane design jointly determine the service transport's required message semantics and compatibility constraints. The execution plane owns worker lifecycle, provisioning backends, pool image selection, runtime credential injection, transport adapter implementation, sandbox enforcement, retries, persistence, scrubbing implementation, and completion delivery. Later sections provide implementation details and examples without redefining these boundaries.
+## Step, Plugin, Extension Definitions
 
-1. **YAML authoring, JSON registry, OCI distribution.** Developers author `manifest.yaml` in a human-friendly format with comments. The SDK validates it against JSON Schema Draft-07 and compiles the descriptor that is embedded in the step's OCI artifact. The OCI artifact is the versioned, published, and stored distribution unit for every step type.
+```mermaid
+graph TB
+    subgraph ext[" "]
+        ExtLabel["<b>Extension</b><br/>Marketplace grouping of multiple plugin packages under a domain (e.g. Terraform)"]
+        subgraph plug["  "]
+            PlugLabel["<b>Plugin</b><br/>Wraps one or more steps with root-level metadata"]
+            subgraph stp["   "]
+                StepLabel["<b>Step</b><br/>Single workflow implementation + metadata"]
+            end
+        end
+    end
 
-2. **Step classification taxonomy.** Every step declares exactly one classification (`task`, `action`, `workflow`, `trigger`) within the overall platform taxonomy. Step definitions declare functional contracts (input/output schemas, abstract dependencies) similar to Ansible modules.
+    style ExtLabel fill:none,stroke:none,color:#000,font-size:18px
+    style PlugLabel fill:none,stroke:none,color:#000,font-size:18px
+    style StepLabel fill:none,stroke:none,color:#000,font-size:18px
+    style ext fill:#dceefb,stroke:#333,stroke-width:2px
+    style plug fill:#ffecd1,stroke:#333,stroke-width:2px
+    style stp fill:#ffe0b2,stroke:#333,stroke-width:2px
+```
 
-3. **Execution placement delegation and abstract task payload.** Step definitions declare functional contracts, while the Execution Plane (EP) determines runtime execution placement based on step classification, resource requirements, and administrative policies or mediators. Both the SDK and execution-plane design jointly determine the service transport's required message semantics and compatibility constraints; the execution plane implements the transport adapter, injection, lifecycle, retries, persistence, and completion behavior.
+| Term | Definition | Ansible analogue |
+|---|---|---|
+| **Step** | A single workflow element with an input/output contract and metadata. "Step" covers all four categories, not only steps inside a workflow graph. | Module |
+| **Plugin** | Wraps one or more step implementations, with root-level metadata pointing at each step's metadata. The versioned distribution unit. | Collection |
+| **Extension** | A grouping of plugins under one domain, for marketplace organization. | — |
 
-4. **Universal OCI packaging and coupled metadata.** Fully decoupling metadata is rejected because independently versioned metadata can drift from the packaged step artifact. Every step is built, versioned, published, and stored as an OCI container image artifact. Every artifact carries its manifest descriptor as an OCI-compliant referral layer annotation with media type `application/vnd.syntara.step.manifest.v1+yaml`. Registration performs an OCI Distribution API manifest or digest metadata query, inspects the response metadata in `<10 ms`, and does not download image layers. The platform's indexed metadata store consumes the extracted manifest and makes the descriptor, inputs, outputs, and image reference available to the canvas in `<500 ms` without an edit-time OCI request. Supports vanilla OCI registry compatibility (standard Kubernetes, EKS, AKS, Quay) without proprietary registry dependencies.
+A plugin may contain steps of different categories — a trigger and a task together, for
+example.
 
-5. **Selection metadata is part of the SDK-to-plane handoff.** `declaredRequirements`, `schedulingControls`, `credentialSpecification.workloadClassification`, resource requirements, and execution timeout describe what the step needs so the platform can validate and route it. These fields express step needs; they do not define worker lifecycle or runtime enforcement mechanics.
+## Ownership Boundaries
 
-6. **Secret handling has an ordered SDK handoff lifecycle.** Draft-07 input properties must use `secret: true` for sensitive values; `is_secret: true` is the compatibility alias. The SDK-side order is `classify → split → decrypt → construct invocation`: secret-marked values are removed from plain `inputs`, decrypted into the transient `credentials` map, and included in the abstract task invocation. The same schema flags remain available to the execution plane for credential separation and its logging and persistence guarantees.
+| Owner | Owns |
+|---|---|
+| **SDK** | `manifest.yaml` format, `common-definitions.json` meta-schema, compiled `step-definition.json`, declared requirements, the abstract task invocation, the `StandardOutputWrapper` result contract, step-side input validation |
+| **Platform registration** | Administrative controls (`sandbox_required`, `egress_policy`, `worker_pool_selector`), metadata indexing, canvas projections |
+| **Control plane (Temporal orchestrator)** | Placement decisions, dispatch, inline activity and listener registration, subworkflow lifecycle |
+| **Execution plane** | Worker lifecycle and provisioning, transport adapter, runtime credential injection, sandbox enforcement, retries, persistence, log scrubbing, completion delivery |
 
-7. **Requirements and controls have different owners.** Developer manifests may declare requested capabilities in `spec.declaredRequirements` (for example, `capabilities: [network-egress]`). Syntara administrators set the effective infrastructure controls during registration through `sandbox_required`, `egress_policy`, and `worker_pool_selector`; these settings are not hardcoded in developer metadata. The platform registration contract carries those fields so pools can be provisioned automatically or assigned manually without changing the SDK contract.
+Everything below describes SDK-owned contracts. Where a section names a platform or
+execution-plane behavior, it is stating an assumption the SDK depends on, not specifying an
+implementation.
 
-8. **OCI registration authority follows every step description.** The OCI container image artifact and its referral-layer manifest are authoritative for every step classification. A descriptor change requires publishing and registering a new image tag or digest; the universal OCI packaging eliminates separate file, ZIP, or direct-descriptor distribution paths.
+## Principles
 
-9. **Strict backwards compatibility.** `StandardOutputWrapper` (`Result`, `StatusCode`, `StatusMessage`, `ErrorMessage`) is immutable. Template expressions like `${task.Result}` never break across step versions.
+1. **YAML in, JSON out.** Authors write `manifest.yaml`. The SDK validates it against JSON
+   Schema Draft-07 and compiles `step-definition.json`, which ships inside the plugin artifact.
+   The artifact format is still open (SDP Q6).
+2. **One category per step.** Every step declares exactly one of `action`, `task`, `workflow`,
+   `trigger`.
+3. **Functional contracts, not infrastructure.** Step definitions declare input/output schemas
+   and abstract dependencies, similar to Ansible modules. They do not declare the infrastructure
+   they run on.
+4. **Declaration is not authorization.** `spec.declaredRequirements` states what a step needs.
+   Administrators grant the corresponding controls at registration time in Syntara.
+5. **Metadata travels with the artifact.** Decoupled, independently versioned metadata is
+   rejected because it drifts from the packaged step. A descriptor change means a new artifact
+   version.
+6. **Zero-trust credentials.** Authentication credentials are platform-managed references
+   (UUIDs), never step inputs. Non-credential sensitive data may be an input flagged
+   `redact: true`, which the platform must keep out of every observable path.
+7. **Immutable output envelope.** `StandardOutputWrapper` (`Result`, `StatusCode`,
+   `StatusMessage`, `ErrorMessage`) never changes shape, so template expressions such as
+   `${task.Result}` survive step version upgrades.
+8. **Validate at three layers (R10).** SDK tooling validates manifests during development and
+   packaging; the workflow designer validates user inputs against step schemas during workflow
+   authoring; base classes validate the invocation before step logic runs. The execution plane
+   may additionally validate at its own boundary. No layer substitutes for another.
 
-10. **Zero-trust resources.** Node definitions store only UUID references to platform-managed credentials. Runtime secret handling and the persistence/logging guarantee are execution-plane responsibilities, while the SDK preserves the credential-reference and sensitive-input contracts described above and in **Credential Handling**.
+## Step Taxonomy
 
-11. **Node-side validation before execution.** The Python reference base classes validate an invocation against the declared input model before calling step execution logic. Execution-plane validation remains an independent boundary check for transport, authorization, and policy enforcement; step code must not be invoked when step-side validation fails.
-
-## Reference SDK Contract (Phase 1)
-
-The Phase 1 Python reference SDK establishes the language-neutral concepts that other SDK implementations must preserve:
-
-- **`StepType`** represents the manifest-backed step identity, classification, version, and descriptor metadata.
-- **`ActionStep`** and **`TaskStep`** specialize the base step execution contract for domain/API integrations and atomic compute, respectively. `WorkflowStep` and `TriggerStep` provide the corresponding control/temporal and trigger classifications.
-- **`Input`** and **`Output`** represent the typed schemas used to validate invocation data and describe step results. In the Python implementation these are supplied by the typed input/output models accepted by `BaseNode`.
-- **`Credential`** represents a platform-managed credential reference and its permitted runtime presentation; plaintext credential material is not part of a step definition.
-- **`ExecutionContext`** carries the workflow execution context supplied to step logic without coupling the step to a particular worker or transport implementation.
-
-The reference hierarchy is an SDK contract, not a requirement that every language use Python class names. All implementations must preserve manifest compatibility, pre-execution input validation, credential-reference semantics, and the standard output envelope.
-
-### Node-Side Input Validation
-
-Before a step's `run` or equivalent execution method is invoked, its base class validates the raw invocation against the declared input model. Invalid, incomplete, or schema-incompatible data produces the standard error result and prevents extension logic from running. This check is intended to reject malformed or malicious payloads early; the execution plane remains responsible for its own transport, authorization, policy, and boundary validation.
-
-The validation ownership is intentionally layered. Node-side validation protects the extension process from invalid data, while execution-plane validation protects the platform boundary. A future transport adapter must not remove either check.
-
-### Dynamic Resource Pickers
-
-Dynamic resource pickers are a secondary capability for forms that need to query an external endpoint at configuration time, such as an AAP inventory or SCM playbook selector. The static manifest schema remains authoritative for field identity, type, requiredness, defaults, and validation. Picker results may supply values or choices, but they must not become an implicit dependency for loading the step descriptor or make the canvas perform remote OCI discovery while editing.
-
-## Core Architectural Standards & Taxonomy
-
-### Step Classification Taxonomy
-
-The platform recognizes step classifications within the overall platform taxonomy, defined canonically as `StepClassification` in `common-definitions.json`:
+Defined canonically as `StepCategory` in `common-definitions.json`:
 
 ```json
 "enum": ["action", "task", "workflow", "trigger"]
 ```
 
-| Category | Purpose | Typical `execution_type` | Examples |
-|----------|---------|--------------------------|----------|
-| `action` | Domain and external API integrations | `container` | `http_request`, `github_issue` |
-| `task` | Atomic compute and script executors | `container` | `script_executor` (Python 3.12, Bash 5.2) |
-| `workflow` | In-memory control-plane logic and composition | `in_process` | `condition`, `loop`, `switch`, `subworkflow_call` |
-| `trigger` | Event entry points | `in_process` | Webhook, Schedule, Kafka Subscribe, Manual, `subworkflow_trigger` |
+| Category | Purpose | Examples |
+|---|---|---|
+| `action` | Domain and external API integrations | `http_request`, `github_issue` |
+| `task` | Atomic compute and script executors | `script_executor` (Python 3.12, Bash 5.2) |
+| `workflow` | Control-plane logic and composition | `condition`, `loop`, `switch`, `subworkflow_call` |
+| `trigger` | Event entry points | webhook, schedule, Kafka subscribe, manual, `subworkflow_trigger` |
 
-All classifications use the same universal OCI container image packaging boundary for catalog management, versioning, registration, and marketplace discovery. Metadata indexing via referral-layer annotations (`application/vnd.syntara.step.manifest.v1+yaml`) supports <10ms OCI queries and <500ms UI canvas rendering without pulling image layers. Subworkflow composition uses native Temporal child workflow executions within the Control Plane.
+All four categories are wrapped in a plugin and use the same registration and versioning path.
 
-### Universal OCI Packaging and Execution Placement Delegation
+### Step Granularity
 
-#### Packaging Boundary (Universal OCI Container Images)
+The SDK does not restrict how many operations a step performs internally. A step's
+implementation is opaque to the platform: the SDK validates the declared input contract and the
+returned result envelope, and cannot inspect or reject a step based on what happens between
+those two boundaries. Fetching from SCM and then running a playbook inside one step is
+permitted. From the platform's perspective a step is a single invocation returning one
+`StandardOutputWrapper`, however many operations produced it.
 
-All step classifications use universal OCI container image packaging. The artifact and its
-`application/vnd.syntara.step.manifest.v1+yaml` referral layer provide the
-versioned catalog unit for registration, database indexing, and marketplace
-discovery. The platform can query the OCI digest metadata in `<10 ms`, hydrate
-its local index, and render canvas forms in `<500 ms` without pulling image
-layers during editing. Supports vanilla OCI registry compatibility (standard Kubernetes, EKS, AKS, Quay) without proprietary registry dependencies.
+Granularity is therefore an authoring-guidance concern, not an enforcement mechanism. Deciding
+when to combine operations into one step versus splitting them across steps belongs in the
+authoring guide required by AC-8 / R11.
 
-#### Runtime Execution Placement Delegation
+### Subworkflow Composition
 
-Step definitions declare functional contracts (input/output schemas, abstract dependencies) similar to Ansible modules. The Execution Plane (EP) determines runtime execution placement based on step classification, resource requirements, and administrative policies or mediators, without requiring explicit execution-type fields in step manifests. The platform evaluates:
+Reference-mode composition is split across two step contracts. The SDK owns their descriptors
+and result shapes; the platform owns selection, eligibility enforcement, and child lifecycle.
 
-- **Step classification** — `task`, `control/temporal`, or `trigger` classification informs execution characteristics
-- **Resource requirements** — CPU, memory, and timeout declarations
-- **Administrative policies** — Sandbox requirements, network egress policies, and worker pool selectors configured during registration
-- **Mediators** — Platform-defined execution mediators that can override default placement logic
+| Step | Category | Role | Reference |
+|---|---|---|---|
+| `subworkflow_trigger` | `trigger` | Child-side entry point. Defines the child's required input schema and output contract. A workflow is eligible for Reference-mode invocation only if it contains an active one. | [tests/fixtures/steps/subworkflow_trigger/](../tests/fixtures/steps/subworkflow_trigger/) |
+| `subworkflow_call` | `workflow` | Parent-side caller. Selects a child by `workflow_id`, surfaces the child's inputs as form fields, re-validates eligibility and execute permission at runtime, pauses the parent, and maps the child's terminal output into `StandardOutputWrapper.Result` (for example `${call_child.Result.summary}`). | [tests/fixtures/steps/subworkflow_call/](../tests/fixtures/steps/subworkflow_call/) |
 
-This delegation model allows the Execution Plane to optimize placement without coupling step definitions to specific execution infrastructure.
+## `manifest.yaml` — The Authoring Format
 
-##### The `subworkflow_trigger` Step (Child Entry & Eligibility)
+One `manifest.yaml` per step type, following Kubernetes CRD conventions: `apiVersion`, `kind`,
+`metadata`, `spec`. It supports comments and multi-line strings, validates against Draft-07 via
+`$ref` into `common-definitions.json`, and compiles to `step-definition.json`.
 
-- **Classification:** `trigger`
-- **Reference implementation:** [tests/fixtures/steps/subworkflow_trigger/](../tests/fixtures/steps/subworkflow_trigger/)
+**Plugin layout.** R8 requires every plugin to use the same structure with a root-level plugin
+manifest, so the platform can index an uploaded artifact without knowing its internal layout:
 
-This is the dedicated child-side entry trigger for Reference-mode subworkflow invocation by a parent workflow. It defines the child workflow's required input-variable schema and output contract. A workflow is eligible for Reference-mode invocation only when it contains an active `subworkflow_trigger`.
-
-##### The Subworkflow Call Step (Parent Invoker & Composition)
-
-- **Classification:** `workflow`
-- **Reference implementation:** [tests/fixtures/steps/subworkflow_call/](../tests/fixtures/steps/subworkflow_call/)
-
-This is the parent-side caller step. It selects a target child workflow by `workflow_id`, dynamically surfaces the child's required input variables as configurable form fields, re-validates child eligibility and the user's execute permission at runtime, pauses parent execution while invoking the child synchronously, and maps the child's terminal output into `StandardOutputWrapper.Result` for downstream template access (for example, `${call_child.Result.summary}`).
-
-### `manifest.yaml` — The Developer Authoring Format
-
-Developers author a single `manifest.yaml` following Kubernetes Custom Resource Definition (CRD) conventions. The manifest is:
-
-- **Human-friendly** — supports comments and multi-line strings
-- **K8s-style structure** — uses `apiVersion`, `kind`, `metadata`, and `spec` sections
-- **Validated** — checked against JSON Schema (Draft-07) referencing `common-definitions.json`
-- **Compiled** — the manifest produces `step-definition.json`, embedded in the OCI artifact stored in the registry
-
-Every step manifest remains coupled to its OCI artifact through the referral
-layer. The canvas consumes the platform's indexed metadata record rather than
-fetching remote metadata while an editor is open.
-
-The manifest and compiled descriptor define the step contract; the universal OCI container image artifact carries the versioned step distribution. `spec.execution.image` identifies the OCI image artifact for all step classifications. The language-neutral SDK contract applies to the invocation and result boundary, while the Execution Plane determines runtime execution placement based on step classification, resource requirements, and administrative policies.
-
-**Plugin Structure & Multi-Step Packaging:**
-
-A single plugin package can house one or more step type definitions (`StepType` descriptors) across different classifications. For example, a plugin could contain both a trigger and a task in the same package. UI canvas grouping (tags, labels) categorizes tools independently of backend plugin packaging layouts, allowing flexible organization of related steps.
-
-**Standard Package Layout:**
 ```
-my-custom-step/
-├── manifest.yaml              # Primary authoring manifest (YAML, K8s CRD structure)
-├── main.py                    # Imperative execution code (or main.sh for Bash)
-├── requirements.txt           # Python dependencies (optional)
-├── README.md                  # Step documentation
+my-plugin/
+├── plugin.yaml                # Root plugin manifest: identity, version, step locations
+├── steps/
+│   ├── http_request/
+│   │   ├── manifest.yaml      # Step manifest (K8s CRD structure)
+│   │   └── main.py            # Implementation (or main.sh for Bash)
+│   └── github_issue/
+│       ├── manifest.yaml
+│       └── main.py
+├── requirements.txt           # Language dependencies (optional)
+├── README.md
 └── tests/
-    └── test_main.py           # Unit tests
 ```
 
-**Example `manifest.yaml` structure (K8s CRD style):**
+Implementations and dependencies ship inside the plugin artifact alongside the manifests.
 
-The base manifest includes `spec.declaredRequirements`. Extension authors use it to declare requested capabilities, credential types, and minimum platform version. These declarations are inputs to administrative review; they do not themselves grant sandbox, network, or worker-pool access.
+> The `plugin.yaml` shape above is intended, not yet schema-validated. See [Gaps](#gaps).
 
-**Note (Non-Normative Example):** Payload and manifest examples in this section are provided strictly for illustrative purposes. They do not define or reference implementation-specific API endpoints.
+**Example:**
 
 ```yaml
 apiVersion: syntara.io/v1alpha1
@@ -147,12 +153,13 @@ kind: StepType
 
 metadata:
   name: http_request
+  namespace: syntara
   displayName: HTTP Request
   version: 1.0.0
   icon: globe
   description: |
-    Non-blocking HTTP/HTTPS API orchestrator with credential injection,
-    response parsing, and automatic retry logic.
+    HTTP/HTTPS API orchestrator with credential injection, response parsing,
+    and retry logic.
   tags:
     - integration:rest-api
     - network:external
@@ -160,20 +167,24 @@ metadata:
   license: Apache-2.0
 
 spec:
-  classification: task
+  category: action
   execution:
-    image: registry.example.com/steps/http-request:1.0.0
+    image: quay.io/syntara/http-request-executor:latest
+    entrypoint: src.main:HttpRequestStep
 
   declaredRequirements:
     capabilities:
       - network-egress
       - readonly-root-filesystem
       - tmpfs-mount
+    credentialTypes:
+      - API Key
+      - Bearer Token
     platformVersion: ">=3.0.0"
 
   schedulingControls:
-    # Optional developer-declared controls. Effective sandbox, egress, and
-    # worker-pool policy is supplied by administrators at registration.
+    # Developer-declared hints only. Effective sandbox, egress, and worker-pool
+    # policy comes from administrators at registration.
     connectivity_requirements:
       - host: api.github.com
         ports:
@@ -185,10 +196,10 @@ spec:
       url:
         type: string
         description: Target HTTP/HTTPS URL
-      api_key:
+      customer_email:
         type: string
-        description: Runtime API key; classified as sensitive by the schema
-        secret: true
+        description: Customer email used for the lookup; sensitive, not a credential
+        redact: true
       method:
         type: string
         enum: [GET, POST, PUT, DELETE, PATCH]
@@ -202,19 +213,13 @@ spec:
       - $ref: "../common-definitions.json#/definitions/StandardOutputWrapper"
 
   resourceRequirements:
-    limits:
-      cpu: 500m
-      memory: 256Mi
-    requests:
-      cpu: 100m
-      memory: 128Mi
+    limits: {cpu: 500m, memory: 256Mi}
+    requests: {cpu: 100m, memory: 128Mi}
 
   executionTimeout: 60
 ```
 
-### Diagram 1 — Step Definition Composition (`manifest.yaml`)
-
-Structural breakdown of what a `manifest.yaml` composes.
+### Diagram 1 — Manifest Composition
 
 ```mermaid
 graph TB
@@ -227,17 +232,19 @@ graph TB
     end
 
     subgraph SPEC_CONTENTS["spec section"]
-        CLASS["classification<br/>task | control/temporal | trigger"]
+        CLASS["category<br/>action | task | workflow | trigger"]
+        EXEC["execution<br/>• image (runtime env)<br/>• entrypoint"]
         INPUTS["inputs<br/>• typed properties<br/>• required / enum / pattern"]
         OUTPUTS["outputs<br/>StandardOutputWrapper"]
-        REQS["declaredRequirements<br/>• capabilities<br/>• platformVersion"]
-        SCHED["schedulingControls<br/>• connectivity controls<br/>• affinity controls"]
+        REQS["declaredRequirements<br/>• capabilities<br/>• credentialTypes<br/>• platformVersion"]
+        SCHED["schedulingControls<br/>• connectivity<br/>• affinity labels"]
     end
 
     MANIFEST --> API
     MANIFEST --> META
     MANIFEST --> SPEC
     SPEC --> CLASS
+    SPEC --> EXEC
     SPEC --> INPUTS
     SPEC --> OUTPUTS
     SPEC --> REQS
@@ -248,19 +255,63 @@ graph TB
     SCHED -.->|$ref| CD
 ```
 
-### Diagram 2 — SDK Authoring & Packaging Lifecycle
+### Dynamic Resource Pickers
 
-The developer lifecycle from scaffold to registry handoff.
+Some forms need to query an external endpoint at configuration time — an AAP inventory, an SCM
+playbook list, an eligible child workflow. The static manifest schema stays authoritative for
+field identity, type, requiredness, defaults, and validation. Picker results may supply values
+or choices, but must not become a prerequisite for loading the descriptor or force the canvas to
+reach a remote registry during editing.
+
+> Provisional: the constraints above are requirements on any answer to SDP Q3, not the answer.
+
+## Packaging and Registration
+
+> **The packaging format is not decided** (Q6, out of scope here — ANSTRAT-2482). The
+> requirements below hold; the OCI specifics after them are provisional.
+
+A plugin is built, versioned, published, and stored as a single artifact containing the compiled
+manifests of every step it wraps. Per R8, every plugin uses the same structure with a
+**root-level plugin manifest**, so the platform can locate and index step metadata from an
+uploaded artifact without knowing the plugin's internal layout.
+
+Whatever format is chosen must:
+
+- carry a root-level plugin manifest that identifies the plugin and points at each step's metadata;
+- keep step metadata coupled to the packaged implementation, so a descriptor cannot drift from
+  the code it describes;
+- allow the platform to read metadata and hydrate its index **without downloading the full
+  artifact**, meeting the `<500 ms` canvas discovery and render target with no remote call while
+  an editor is open;
+- support semantic versioning per AC-5, with a defined update path; and
+- avoid a proprietary registry dependency.
+
+### OCI as the Leading Candidate (Provisional)
+
+The current proposal is an OCI container image artifact carrying each manifest descriptor as a
+referral layer annotation with media type `application/vnd.syntara.step.manifest.v1+yaml`.
+Registration issues an OCI Distribution API manifest or digest query against `image_ref`, reads
+the annotation, and hydrates the index in `<10 ms` without pulling layers. Re-registering a new
+tag or digest is the descriptor-update path, which is what prevents metadata drift. This works
+against vanilla OCI registries (Kubernetes, EKS, AKS, Quay).
+
+Its appeal is precisely the drift property: the manifest travels inside the artifact rather than
+being versioned separately alongside it. Any alternative format should be judged on whether it
+preserves that.
+
+### Diagram 2 — Authoring and Packaging Lifecycle
+
+Format-specific steps are marked provisional pending Q6.
 
 ```mermaid
 graph LR
-    INIT["syntara-sdk init<br/>(Scaffold package)"]
-    AUTHOR["Author<br/>manifest.yaml"]
-    VALIDATE["syntara-sdk validate<br/>Draft-07 check vs<br/>common-definitions.json"]
-    BUILD["Build OCI artifact<br/>manifest + implementation"]
-    REFERRAL["Attach referral layer<br/>application/vnd.syntara.step.manifest.v1+yaml"]
-    PUBLISH["Publish/version OCI artifact<br/>platform registration"]
-    HANDOFF["Indexed in platform DB<br/>available to Orchestrator"]
+    INIT["syntara-sdk init<br/>(scaffold plugin)"]
+    AUTHOR["Author plugin manifest<br/>+ step manifest.yaml"]
+    VALIDATE["syntara-sdk validate<br/>Draft-07 vs<br/>common-definitions.json"]
+    BUILD["Build plugin artifact<br/>manifests + implementations"]
+    REFERRAL["Attach metadata<br/>(referral layer -- provisional)"]
+    PUBLISH["Publish/version artifact<br/>platform registration"]
+    HANDOFF["Indexed in platform store<br/>available to orchestrator"]
 
     INIT --> AUTHOR
     AUTHOR --> VALIDATE
@@ -270,144 +321,117 @@ graph LR
     PUBLISH --> HANDOFF
 ```
 
-## Platform Metadata & Storage Assumptions
+### Platform Metadata Assumptions
 
-The SDK does not prescribe a database schema, ORM, persistence technology, or
-REST routing model for the host platform. It assumes that extension
-registration populates an indexed platform metadata store that can support the
-following uses:
+The SDK prescribes no database schema, ORM, persistence technology, or REST routing. It assumes
+registration populates an indexed store that can:
 
-- retain the compiled `step-definition.json` descriptor or an equivalent canonical representation extracted from each step's OCI referral layer;
-- expose indexed identity, category, version, execution type, and image-reference metadata;
-- make input and output schemas available to the canvas and execution plane;
-- keep administrative registration policy separate from developer-authored manifests and OCI metadata; and
-- satisfy the `<500 ms` canvas discovery and rendering SLA without remote OCI calls during editing.
+- retain the compiled `step-definition.json` or an equivalent canonical descriptor;
+- expose indexed identity, namespace, category, version, and artifact-reference metadata;
+- serve input and output schemas to the canvas and the execution plane;
+- keep administrative registration policy separate from developer-authored manifests; and
+- meet the `<500 ms` canvas target without remote artifact fetches during editing.
 
-The metadata store may be implemented with a relational database, document
-store, search index, cache, or another platform-owned service. Its schema and
-storage transport are implementation choices outside the SDK specification.
-
-The concrete wire protocol remains an open joint SDK and execution-plane decision. The SDK specification owns the invocation and result semantics and the compatibility requirements that any selected protocol must satisfy; the execution plane owns the adapter implementation and runtime consumption.
-
-### Illustrative platform registry consumption
-
-The following conceptual projection shows the information a platform registry
-could parse from a compiled descriptor. It is an illustrative example only and
-is not a final implementation record, ORM model, storage schema, or API
-contract.
-
-**Note (Non-Normative Example):** Payload and manifest examples in this section are provided strictly for illustrative purposes. They do not define or reference implementation-specific API endpoints.
-
-```json
-{
-  "identity": {
-    "name": "script_executor",
-    "version": "1.0.0"
-  },
-  "metadata": {
-    "displayName": "Python Script Executor",
-    "category": "task",
-    "description": "Executes a script in a shared runner"
-  },
-  "descriptor": "compiled step-definition.json",
-  "execution": {
-    "type": "container",
-    "image": "quay.io/syntara/script-python-executor:latest"
-  },
-  "availability": {
-    "enabled": true
-  }
-}
-```
-
-An implementation may map this projection to an ORM model or other indexed
-record, but that mapping is non-normative. The SDK contract is the manifest,
-compiled descriptor, OCI packaging convention, and execution handoff—not the
-platform's persistence representation.
-
-### Authoritative registration paths by step type
-
-All step categories use the same OCI registration path. Runtime execution type
-changes dispatch behavior only; it does not change how a step is packaged,
-versioned, published, or indexed:
-
-| Node type | Authoritative registration mechanism | Image and descriptor rules |
-|-----------|--------------------------------------|----------------------------|
-| All `action`, `task`, `workflow`, and `trigger` steps | OCI Distribution API digest query | The OCI artifact and its `application/vnd.syntara.step.manifest.v1+yaml` referral layer are authoritative. A descriptor change requires registering a new image tag or digest, regardless of `execution_type`. |
-
-For every step, `image_ref` identifies the artifact whose metadata is inspected.
-The platform performs the OCI metadata query in `<10 ms`, extracts the embedded
-manifest annotation, and hydrates its indexed metadata store without downloading
-image layers. Re-registering a new image version or digest is the supported
-descriptor-update path and prevents image/metadata version drift. Administrative
-fields such as `sandbox_required`, `egress_policy`, and `worker_pool_selector`
-remain registration-owned for every step type.
-
-**Note (Non-Normative Example):** Payload and manifest examples in this section are provided strictly for illustrative purposes. They do not define or reference implementation-specific API endpoints.
+Relational database, document store, search index, or cache are all acceptable. The registration
+payload the platform receives looks roughly like this:
 
 ```json
 {
   "name": "script_executor",
   "category": "task",
-  "execution_type": "container",
   "image_ref": "registry.example.com/steps/script-executor:1.0.0",
   "version": "1.0.0",
   "sandbox_required": true,
   "egress_policy": "restricted",
-  "worker_pool_selector": {
-    "workload": "automation",
-    "region": "us-east-1"
-  }
+  "worker_pool_selector": {"workload": "automation", "region": "us-east-1"}
 }
 ```
 
-The platform may validate administrative policy fields and may expose indexed
-descriptor and palette projections to the canvas through any suitable local
-discovery mechanism. Those choices are intentionally outside this SDK
-specification.
+`name`, `category`, `image_ref`, and `version` come from the descriptor. `sandbox_required`,
+`egress_policy`, and `worker_pool_selector` are administrator-supplied and are never read from
+developer metadata.
 
-## Dynamic Dispatch Logic
+## Dispatch and Handoff
 
-The orchestrator's workflow engine forks execution on a step's `execution_type`. This fork is the boundary between the control plane and the execution plane.
+Manifests do not declare where a step runs. Placement is the **platform dispatcher's**
+decision and is explicitly out of scope for ANSTRAT-2422. The SDK's obligation under R13 is
+narrower: the compiled manifest must carry enough detail for the dispatcher to decide. It
+supplies:
 
-### Execution Placement Dispatch
+- **Category** — the step's architectural role.
+- **Resource requirements** — `resourceRequirements` and `executionTimeout`.
+- **Declared requirements** — `declaredRequirements.capabilities`, which may make isolation
+  mandatory.
+- **Administrative policy** — `sandbox_required`, `egress_policy`, `worker_pool_selector` from
+  registration.
+
+> Whether these fields are *sufficient* under R13 is unverified until SDP Q10 is answered.
 
 ```mermaid
 graph TB
-    GRAPH["Orchestrator Workflow Engine<br />(Temporal Activity Dispatcher)"]
-    FORK{"execution_type in manifest.yaml?"}
+    GRAPH["Activity dispatcher"]
+    FORK{"Execution location inferred from manifest (or platform setting)"}
 
-    subgraph INPROC_BOX["in_process Branch (Control Plane In-Memory)"]
+    subgraph INPROC_BOX["control plane execution"]
         direction TB
-        CTRL["Workflow Logic Primitives<br />(condition, loop, switch)"]
-        TRIG_NODE["Event Triggers<br />(webhook, schedule, subworkflow_trigger, kafka_subscribe)"]
-        SUBWF_CALL["Subworkflow Call Node<br />(Reference Mode - Child Invocation)"]
+        CTRL["Workflow logic primitives<br />(condition, loop, switch)"]
+        TRIG_NODE["Event triggers<br />(webhook, schedule, kafka, subworkflow_trigger)"]
+        SUBWF_CALL["subworkflow_call<br />(Reference-mode child invocation)"]
     end
 
-    subgraph CONTAINER_BOX["container Branch (Execution Plane)"]
+    subgraph CONTAINER_BOX["containerized execution (EP)"]
         direction TB
-        EXEC_DISPATCH["Execution Plane Dispatcher<br />(stdin / gRPC Task Envelope)"]
-        WORKER_POD["Worker Pod / Warm Pool<br />(http_request, script_executor, etc.)"]
+        EXEC_DISPATCH["Execution Plane Dispatcher<br />(gRPC Envelope"]
+        WORKER_POD["Worker pod / warm pool<br />(http_request, script_executor, ...)"]
     end
 
     RESULT["StandardOutputWrapper<br />{Result, StatusCode, StatusMessage, ErrorMessage}"]
 
     GRAPH --> FORK
-    FORK -->|in_process| INPROC_BOX
-    FORK -->|container| CONTAINER_BOX
+    FORK -->|control plane / temporal| INPROC_BOX
+    FORK -->|execution plane| CONTAINER_BOX
 
     INPROC_BOX --> RESULT
     EXEC_DISPATCH --> WORKER_POD --> RESULT
 ```
 
-- **`in_process` branch** — the engine dispatches the SDK-authored step implementation as a built-in workflow activity within the orchestrator process. This path serves control-plane workflow logic, event triggers, and reference-mode subworkflow calls; those implementations execute in the orchestrator rather than being sent to the execution plane.
-- **`container` branch** — the engine resolves the local descriptor and registration policy, performs the ordered classify/split/decrypt/invocation-construction flow, and hands the execution plane the abstract task invocation plus the step-specific selection metadata. The execution plane consumes that handoff and returns the standard output contract; worker lifecycle, provisioning backend, transport, retries, persistence, and completion delivery are outside the SDK.
+- **Control-plane placement** — the engine runs the step as a built-in activity or listener
+  inside the orchestrator process. No execution-plane task or worker pod is created.
+- **Execution-plane placement** — the engine resolves the descriptor and registration policy,
+  builds the abstract task invocation (see [Credentials and Sensitive Data](#credentials-and-sensitive-data)), and
+  hands it to the execution plane.
 
-Both branches return the identical `StandardOutputWrapper` envelope, so downstream steps are agnostic to where a step ran.
+Both placements return the same `StandardOutputWrapper`, so downstream steps do not care where a
+step ran. Placement may change between platform releases, or for the same step under different
+administrative policy, without the manifest changing.
+
+### Runtime Image vs. Plugin Artifact
+
+Two references, easily confused, doing different jobs.
+
+| | `spec.execution.image` | Plugin artifact (`image_ref`) |
+|---|---|---|
+| What it is | The runtime the step executes **in**: an interpreter plus the SDK | The published package the step ships **in** |
+| Contains step code? | No | Yes — every step in the plugin |
+| Scope | Reused across steps and across plugins | One plugin |
+| Set by | The author, in the manifest | The publisher, at `push` time |
+
+At execution the plane starts the runtime image, makes the plugin artifact's code available to
+it, and then needs to know *which* step in that plugin to run. That is
+`spec.execution.entrypoint` (`module.path:ClassName`).
+
+**Every image-backed step declares a handle**, whether its plugin ships one step or twenty.
+The schema requires `entrypoint` whenever `image` is set, so the runtime loads every step the
+same way and there is no single-step special case to implement or get wrong. A plugin may
+package several steps (R8), and uniform loading is what makes that work without the runtime
+needing to know how many there are.
+
+The handle is a `module:Class` reference, not a shell command, because the step must be invoked
+through its `BaseStep` subclass — that is where input validation and the `redact` echo check
+live, and a subprocess would bypass both.
+
 
 ### Diagram 3 — SDK-to-Execution-Plane Handoff Contract
-
-The contract the control plane hands to the execution plane for a `container` step.
 
 ```mermaid
 graph LR
@@ -417,8 +441,8 @@ graph LR
 
     subgraph CONTRACT["Handoff Contract →"]
         C1["image_ref"]
-        C2["abstract task invocation<br/>script + inputs + credentials + context"]
-    C3["selection metadata<br/>requirements + credential classification + resources"]
+        C2["abstract task invocation<br/>script + inputs + resolved credentials + context"]
+        C3["selection metadata<br/>requirements + credential classification + resources"]
         C4["registration controls<br/>sandbox + egress + pool selector"]
     end
 
@@ -443,159 +467,119 @@ graph LR
     BB --> R4
 ```
 
-The handoff fields have distinct purposes:
+| Field | Carries |
+|---|---|
+| `image_ref` | The registered plugin artifact the descriptor was extracted from. Authoritative for the step's contract. |
+| `execution.image` + `entrypoint` | The runtime image the step executes in, and the `module:Class` handle identifying which step the runner should load. |
+| Abstract task invocation | Script, `inputs` (including `redact`-flagged values), credentials resolved from `credential_references`, and `workflow_context`. |
+| Selection metadata | `declaredRequirements`, `resourceRequirements`, `executionTimeout` — enough for the platform to validate and route. |
+| Registration controls | Administrator-owned `sandbox_required`, `egress_policy`, `worker_pool_selector`. |
 
-- **`image_ref`** identifies the registered OCI artifact for every step type; its referral-layer descriptor remains authoritative regardless of whether `execution_type` routes the step `in_process` or to a container worker.
-- **The abstract task invocation** carries the script, plain inputs, decrypted credentials, and workflow context required to execute the step without exposing secret-marked values in the plain `inputs` map. Its concrete transport is selected through the joint SDK and execution-plane protocol decision and implemented by the execution plane.
-- **Selection metadata** carries the step's declared requirements, `credentialSpecification.workloadClassification`, resource shape, and timeout so the platform can validate and route the invocation.
-- **Registration controls** carry the administrator's authoritative sandbox, egress, and worker-pool binding independently of developer-authored metadata.
+### Control-Plane Handoff
 
-## Control-Plane (`in_process`) Sequence Flows
+Control-plane-placed steps use the same descriptor, schema metadata, and abstract invocation,
+minus `image_ref` resolution and the transport hop. The control plane registers the activity or
+listener and executes it inline. Two categories vary the return side:
 
-The `in_process` diagrams intentionally stop at the SDK-to-Control-Plane
-handoff. The Control Plane (Temporal Orchestrator) is shown as an implementation
-boundary: the SDK defines the descriptor, schemas, invocation metadata, and
-standard result contract, while the Control Plane registers activities or
-listeners and performs the internal execution. These paths do not create an
-execution-plane task or worker pod for each event.
+| Step kind | Control plane performs | Returns |
+|---|---|---|
+| `workflow` primitives (`condition`, `loop`, `switch`) | Inline in-memory evaluation | `StandardOutputWrapper` |
+| `subworkflow_call` | Eligibility and execute-permission re-validation, parent pause, inline child invocation, terminal-output collection | `StandardOutputWrapper` with child terminal outputs in `Result` |
+| `trigger` (webhook, schedule, Kafka, `subworkflow_trigger`) | Listener binding from the descriptor, filter evaluation, workflow instantiation | Trigger activity log entry and initial workflow context |
 
-### General `in_process` SDK Handoff Contract
+> The trigger row conflicts with R4's "every step". See [Gaps](#gaps).
 
-Every in-process step uses the same SDK-facing handoff shape. The descriptor
-identifies the step category and execution placement; schema metadata describes
-the typed inputs and output model; and the abstract invocation carries the
-runtime values and context. The Control Plane owns how those fields are
-registered and executed inline and returns the immutable result envelope.
+### Transport
 
-```mermaid
-graph LR
-    subgraph SDK["SDK / Developer Boundary"]
-        DESC["step-definition.json<br />descriptor (in_process)"]
-    end
+The wire protocol between the control-plane dispatcher and the execution plane is undecided. The
+SDK owns the invocation and result semantics and the compatibility constraints any protocol must
+satisfy — message framing, neutrality to cold-start versus warm-pool lifecycle, and bidirectional
+error and timeout signaling. The execution plane owns the adapter implementation, SIGTERM
+handling, warm-pool provisioning, and completion signaling.
 
-    subgraph CONTRACT["Control Plane Handoff Contract →"]
-        C1["Descriptor & Registration<br />category + execution_type: in_process"]
-        C2["Abstract Task Invocation<br />inputs + decrypted credentials + context"]
-        C3["Schema Metadata<br />typed input constraints + output model"]
-    end
+> Transport is undecided (SDP Q1); any `stdin` reference left in code is prototype residue.
 
-    subgraph ENGINE["Control Plane (Orchestrator / Temporal)<br />[Implementation Boundary]"]
-        BB["Receive · Register Activity/Listener ·<br />Execute In-Memory Inline"]
-    end
+## Credentials and Sensitive Data
 
-    subgraph RETURN["← StandardOutputWrapper"]
-        R1["Result"]
-        R2["StatusCode"]
-        R3["StatusMessage"]
-        R4["ErrorMessage"]
-    end
+R5 separates two things the SDK used to conflate.
 
-    DESC --> C1 --> BB
-    DESC --> C2 --> BB
-    DESC --> C3 --> BB
-    BB --> R1
-    BB --> R2
-    BB --> R3
-    BB --> R4
+**Authentication credentials** are never step inputs. A step declares platform-managed
+references by UUID; it must not accept a credential value as an input string. The execution
+plane resolves the reference and supplies the value out of band, so the credential never
+appears in the manifest, the descriptor, or the `inputs` map.
+
+```yaml
+spec:
+  credentialSpecification:
+    credential_references:
+      - credential_id: 550e8400-e29b-41d4-a716-446655440000
+        credential_mount_type: tmpfs_file
+        credential_mount_path: /tmp/api-key
 ```
 
-### Event Trigger SDK Handoff Contract
+**Non-credential sensitive data** — PII, business-sensitive fields — *is* a normal input,
+flagged `redact: true`. The step receives the value
+because it needs it; the flag governs where that value is allowed to appear afterwards.
 
-Event triggers, including Kafka Subscribe and the child-side
-`subworkflow_trigger`, expose event-source binding, filter, and initial-context
-metadata through the SDK descriptor. The Control Plane owns the listener,
-filter evaluation, workflow instantiation, and trigger activity logging. For a
-`subworkflow_trigger`, the descriptor also establishes the child's
-Reference-mode eligibility; it is not the parent-side caller.
+| | Authentication credentials | Sensitive non-credential data |
+|---|---|---|
+| Declared as | `credential_references` (UUID) | an input with `redact: true` |
+| Reaches the step | resolved out of band by the execution plane | in the `inputs` map |
+| In the descriptor | UUID only | schema flag only, never a value |
 
-```mermaid
-graph LR
-    subgraph SDK["SDK / Trigger Definition"]
-        TRIG_DESC["Trigger Manifest / Descriptor<br />(classification: trigger, in_process)"]
-    end
+### The Non-Disclosure Guarantee
 
-    subgraph HANDOFF["Handoff Contract →"]
-        H1["Listener Binding<br />topic / event source specification"]
-        H2["Filter Schema & Criteria<br />header, key, & payload match rules"]
-        H3["Context Injection Map<br />initial workflow payload structure"]
-    end
+Neither a credential value nor a `redact`-flagged input value may appear in:
 
-    subgraph CONTROL["Control Plane Event Engine<br />[Implementation Boundary]"]
-        EXEC["Listen Stream · Evaluate Filter ·<br />Instantiate Workflow Instance"]
-    end
+- `StandardOutputWrapper` fields (`Result`, `StatusMessage`, `ErrorMessage`)
+- workflow variables and template expression results
+- error messages and stack traces
+- execution logs
+- persisted state
 
-    subgraph RETURN["← Event Context & Log"]
-        OUT["Trigger Activity Log Entry &<br />Initial Workflow Context Payload"]
-    end
+The platform dispatcher and execution plane enforce this across every observable path —
+invocation, output, error, and logging — and are the **authoritative security boundary**. The
+SDK does not define the scrubbing implementation.
 
-    TRIG_DESC --> H1 --> EXEC
-    TRIG_DESC --> H2 --> EXEC
-    TRIG_DESC --> H3 --> EXEC
-    EXEC --> OUT
-```
+### SDK-Side Echo Check
 
-### Synchronous Composition SDK Handoff Contract
+As defense in depth, SDK base classes validate that a step implementation does not echo a
+`redact`-flagged input value into its output. This catches the common authoring mistake of
+returning a sensitive input in a result payload. It is a secondary check: it runs inside the
+step process, sees only that step's own inputs and outputs, and does not relieve the platform
+of the guarantee above.
 
-The `subworkflow_call` descriptor is the parent-side SDK contract for
-Reference-mode composition. It exposes the target identifier, the mapped wire
-payload, and the pre-execution contract that the platform must evaluate. The
-Control Plane owns child selection, eligibility and permission checks, parent
-pausing, child execution, and terminal-output collection; the SDK owns the
-descriptor and the stable result shape. The child-side `subworkflow_trigger`
-descriptor remains the source of the child's required input schema and
-Reference-mode eligibility.
+**Authorization is the platform's.** Nothing in the SDK constrains *which* credentials a step
+may request. A step declares the references it intends to use; the platform decides whether the
+request is permitted at dispatch time, based on the invoking actor's permissions and the
+credential's own access policy.
 
-```mermaid
-graph LR
-    subgraph SDK["SDK / Call Node Definition"]
-        CALL_DESC["Call Node Descriptor<br />(classification: control/temporal, in_process)"]
-    end
+## Policy and Registration Controls
 
-    subgraph HANDOFF["Handoff Contract →"]
-        H1["Target Selection<br />workflow_id (Reference Mode)"]
-        H2["Mapped Input Payload<br />ingress_payload (JSON map)"]
-        H3["Pre-Execution Contract<br />eligibility & permission re-validation"]
-    end
+Three parties, three responsibilities:
 
-    subgraph CONTROL["Control Plane Activity<br />[Implementation Boundary]"]
-        EXEC["Validate Eligibility/Permissions ·<br />Pause Parent & Invoke Child Inline ·<br />Collect Terminal Child Outputs"]
-    end
+1. **The step declares.** `manifest.yaml` supplies category, execution metadata, input/output
+   schemas, `redact` markers, `resourceRequirements`, `credentialSpecification`, and
+   `declaredRequirements`. `capabilities: [network-egress]` says the step needs outbound
+   connectivity; it does not grant it.
+2. **Administrators decide.** `sandbox_required`, `egress_policy`, and `worker_pool_selector`
+   arrive through the registration API. They are authoritative for the registered step and are
+   independent of image metadata. Pools may be provisioned automatically or assigned by
+   operations.
+3. **The execution plane enforces.** It receives the descriptor, the invocation, the declared
+   requirements, and the administrative controls, and owns everything runtime: worker lifecycle,
+   provisioning, credential injection, sandbox and transport enforcement, retries, persistence,
+   log scrubbing, and completion delivery.
 
-    subgraph RETURN["← StandardOutputWrapper"]
-        R1["Result (Child Terminal Outputs)"]
-        R2["StatusCode"]
-        R3["StatusMessage"]
-        R4["ErrorMessage"]
-    end
+### Diagram 4 — Registration Governance Inspection
 
-    CALL_DESC --> H1 --> EXEC
-    CALL_DESC --> H2 --> EXEC
-    CALL_DESC --> H3 --> EXEC
-    EXEC --> R1
-    EXEC --> R2
-    EXEC --> R3
-    EXEC --> R4
-```
-
-## Policy & Security Enforcement
-
-### The Three-Party Enforcement Model
-
-1. **The step declares its contract and requirements.** `manifest.yaml` declares the step's category, execution metadata (including an image reference when `execution_type: container`), input/output schemas, secret markers, resource shape, `credentialSpecification`, and `declaredRequirements`. For example, `credentialSpecification.workloadClassification: agentic` establishes the credential access boundary, while `declaredRequirements.capabilities: [network-egress]` states that the extension needs outbound connectivity. Sensitive input definitions must use `secret: true` (or `is_secret: true`). The manifest declares the need; it does not grant infrastructure access.
-
-2. **Administrators set registration policy.** Syntara supplies `sandbox_required`, `egress_policy`, and `worker_pool_selector` through the platform registration contract. These settings are authoritative for the registered extension and remain independent of the image metadata. The platform may provision pools automatically or use an operations assignment.
-
-3. **The Execution Plane consumes the SDK contract.** It receives the local descriptor, abstract task invocation, declared requirements, and administrative registration controls. It owns worker lifecycle, provisioning, runtime credential injection, sandbox and transport enforcement, retries, persistence, log scrubbing, and completion delivery. Those mechanisms are intentionally not defined by the SDK.
-
-### Diagram 4 — Declared Capabilities & Permission Manifest
-
-Diagram 4 represents static **Platform Registration & Governance Inspection** performed by the backend during step registration and dispatch preparation. It is a policy and metadata flow; it is not code executed inside the SDK runtime. The step manifest supplies requirements and credential classification, while the platform evaluates those declarations against administrator-controlled registration policy before allowing dispatch.
+This is a static policy and metadata flow evaluated by the backend during registration and
+dispatch preparation. It is not code running inside the SDK.
 
 ```mermaid
 graph TB
     subgraph MANIFEST["Declared Permission Manifest (static)"]
-        WC["Credential Specification<br/>workloadClassification<br/>spec.credentials.classification<br/>action | agentic"]
-        REQS["manifest.declaredRequirements<br/>capabilities"]
+        REQS["spec.declaredRequirements<br/>capabilities"]
         CONN["registration.egress_policy<br/>none | restricted | unrestricted"]
         CAPS["registration.sandbox_required<br/>+ worker_pool_selector"]
     end
@@ -605,7 +589,6 @@ graph TB
         DECISION{"Approve for<br/>execution?"}
     end
 
-    WC --> REVIEW
     REQS --> REVIEW
     CONN --> REVIEW
     CAPS --> REVIEW
@@ -614,83 +597,36 @@ graph TB
     DECISION -->|Rejected| BLOCK["Blocked before<br/>dispatch"]
 ```
 
-Key inspection points, all resolvable without executing the step:
-
-- **Credential Specification classification** (`action` | `agentic`) — `workloadClassification` is defined inside the step's credential specification in the step's manifest (`spec.credentials.classification` in the platform permission model; stored by the SDK descriptor as `spec.credentialSpecification.workloadClassification`). It gates which credential classes the step may access; `agentic` steps are blocked from infrastructure credentials.
-- **`egress_policy`** — the administrator-selected egress mode supplied to the execution plane for runtime policy enforcement
-- **`sandbox_required`** — the administrative requirement supplied to the execution plane for sandbox enforcement
-- **`worker_pool_selector`** — affinity labels supplied to the execution plane for eligible worker selection
-
-### Credential Handling
-
-Secret handling has the following required order:
-
-1. **Classify.** Before execution-plane dispatch and before the abstract invocation is constructed, the dispatcher validates the logical invocation against the compiled input schema. A property is sensitive when it has the canonical `secret: true` flag; the compatibility alias `is_secret: true` is also recognized.
-2. **Split.** The dispatcher uses those schema flags to separate the invocation values into plain `inputs` and secret-marked values. Secret values are not copied into the plain `inputs` map.
-3. **Decrypt.** The credential service resolves and decrypts the secret-marked values, producing the transient `credentials` map. A decryption or authorization failure stops dispatch before the execution plane receives the invocation.
-4. **Construct the abstract invocation.** The dispatcher builds the invocation envelope containing the script code, plain `inputs`, decrypted `credentials`, and `workflow_context`:
-
-   **Note (Non-Normative Example):** Payload and manifest examples in this section are provided strictly for illustrative purposes. They do not define or reference implementation-specific API endpoints.
-
-   ```json
-   {
-     "script": "...",
-     "inputs": {"url": "https://example.com"},
-     "credentials": {"api_key": "..."},
-     "workflow_context": {"execution_id": "..."}
-   }
-   ```
-
-5. **Hand off the abstract invocation.** The complete envelope—including decrypted `credentials`—is the SDK-to-execution-plane task payload. The execution plane implements the selected transport adapter, credential-injection mechanism, and mapping to the step runner.
-6. **Retain schema sensitivity metadata for the execution plane.** The compiled `secret: true`/`is_secret: true` definitions accompany the step contract so the execution plane can separate credentials and apply its logging and persistence guarantees. The SDK does not define the scrubbing implementation.
-
-The step process does not implement a technology-specific execution-plane entry point. Its SDK-facing contract is to consume the abstract invocation and return the standard output contract through the protocol selected by the joint SDK and execution-plane design; the execution plane owns transport adaptation and completion signaling.
-
-**Security classification (`credentialSpecification.workloadClassification`):**
-
-- **`action`** — scripted, deterministic execution. May request infrastructure credentials (SSH, cloud API keys, vault access).
-- **`agentic`** — LLM-driven, non-deterministic execution. **Restricted from requesting high-privilege infrastructure credentials.** This prevents a prompt-injection attack against an AI agent step from escalating into infrastructure compromise.
+Every inspection point resolves without executing the step.
 
 ## Schema Reference
 
-### Platform Meta-Schema
-
-The platform maintains a **single meta-schema** that defines shared types, enums, and validation rules:
-
-| File | Role |
-|------|------|
-| `common-definitions.json` | **Sole platform meta-schema** — defines `NodeTypeManifest`, `StepClassification`, `NodeExecutionType`, `CredentialSpecification`, `WorkloadClassification`, `StandardOutputWrapper`, `CredentialReference`, `InputParameter`, `ResourceRequirements`, `SchedulingControls`, and `DependencyDeclaration` |
-
-Individual step schemas are **not** maintained as separate `.schema.json` files. Instead:
-
-1. **Developers author** `manifest.yaml` instances following the K8s CRD structure
-2. **The SDK compiles** each manifest into a `step-definition.json` build artifact for backend DB storage
-3. **The platform metadata store persists** the compiled `step-definition.json` or an equivalent canonical descriptor
-4. **The orchestrator and canvas consume** the compiled artifact, not the source manifest
-
-`common-definitions.json` is the authoritative source for shared platform types. All `manifest.yaml` instances reference these definitions via `$ref` during validation.
-
-### Key Common Definitions
+`common-definitions.json` is the sole platform meta-schema and the authoritative source for
+shared types. Individual steps do not ship their own `.schema.json` files: authors write
+`manifest.yaml`, the SDK compiles `step-definition.json`, the platform store persists it, and the
+orchestrator and canvas consume the compiled artifact rather than the source manifest.
 
 | Definition | Purpose | Shape |
 |---|---|---|
-| `NodeTypeManifest` | K8s CRD structure validation | `{apiVersion, kind, metadata, spec}` |
-| `StepClassification` | Four-category taxonomy | `enum: ["action", "task", "workflow", "trigger"]` |
-| `NodeExecutionType` | Execution plane fork | `enum: ["in_process", "container"]` |
-| `CredentialSpecification` | Node credential access boundary | `{workloadClassification, credential_references}` |
-| `WorkloadClassification` | Credential access classification | `enum: ["action", "agentic"]` |
+| `StepTypeManifest` | K8s CRD structure validation | `{apiVersion, kind, metadata, spec}`; `metadata` requires `name`, `namespace`, `displayName`, `version`, `description` |
+| `StepCategory` | Four-category taxonomy | `enum: ["action", "task", "workflow", "trigger"]` |
+| `StepInputs` | Draft-07 input object | `{properties, required}` |
+| `InputParameter` | One input, including sensitivity | `redact: true` |
 | `StandardOutputWrapper` | Immutable output contract | `{Result, StatusCode, StatusMessage, ErrorMessage}` |
-| `CredentialReference` | UUID-based credential reference | `{credential_id, credential_mount_type, credential_mount_path}` |
-| `InputParameter` | Sensitive-input classification | `secret: true` or `is_secret: true` |
-| `NodeRegistrationPolicy` | Syntara-owned execution policy | `{sandbox_required, egress_policy, worker_pool_selector}` |
-| `ResourceRequirements` | Kubernetes resource limits | `{limits: {cpu, memory}, requests: {cpu, memory}}` |
-| `SchedulingControls` | Developer-declared scheduling controls | `{connectivity_requirements, affinity_labels}` |
+| `CredentialSpecification` | Step credential access boundary | `{credential_references}` |
+| `CredentialReference` / `CredentialReferenceList` | UUID-based credential reference | `{credential_id, credential_mount_type, credential_mount_path}` |
+| `DependencyDeclaration` | Language-specific dependency declaration | per-runtime package list |
+| `ResourceRequirements` | Kubernetes resource shape | `{limits: {cpu, memory}, requests: {cpu, memory}}` |
+| `ExecutionTimeout` | Total step timeout in seconds | integer |
+| `SchedulingControls` | Developer-declared placement hints | `{connectivity_requirements, affinity_labels}` |
+| `StepPaletteIcon` | Canvas palette glyph | enum |
+| `StepRegistrationPolicy` | Administrator-owned controls | `{sandbox_required, egress_policy, worker_pool_selector}` |
 
-### Compiled Definition Shape (K8s CRD)
+`spec.retryPolicy` (`max_attempts`, `initial_interval_seconds`, `backoff_coefficient`,
+`retryable_status_codes`) also exists in the schema but has no corresponding SDP requirement. It
+is the natural hook for the Temporal durable-execution question (SDP Q8).
 
-Every compiled `step-definition.json` follows the K8s CRD structure:
-
-**Note (Non-Normative Example):** Payload and manifest examples in this section are provided strictly for illustrative purposes. They do not define or reference implementation-specific API endpoints.
+### Compiled Descriptor Shape
 
 ```json
 {
@@ -707,31 +643,79 @@ Every compiled `step-definition.json` follows the K8s CRD structure:
   "spec": {
     "category": "action",
     "execution": {
-      "type": "container",
-      "image": "registry.example.com/steps/http-request:1.0.0"
+      "image": "quay.io/syntara/http-request-executor:latest"
     },
-    "inputs": { "...": "typed properties" },
-    "outputs": { "$ref": "common-definitions.json#/definitions/StandardOutputWrapper" }
+    "inputs": {"...": "typed properties"},
+    "outputs": {"$ref": "common-definitions.json#/definitions/StandardOutputWrapper"}
   }
 }
 ```
 
-## Example Nodes
+## Reference SDK (Phase 1, Python)
 
-The SDK includes reference implementations demonstrating each step category:
+Python is the reference implementation, not the contract. Another language binding must preserve
+manifest compatibility, pre-execution input validation, credential-reference semantics, and the
+standard output envelope — but not these class names.
 
-| Example | Classification | Execution Type | Location | Purpose |
-|---------|----------|----------------|----------|---------|
-| `http_request` | action | container | [tests/fixtures/steps/http_request/](../tests/fixtures/steps/http_request/) | External API integration |
-| `script_executor` | task | container | [tests/fixtures/steps/script_executor/](../tests/fixtures/steps/script_executor/) | Zero-build script runner |
-| `subworkflow_call` | workflow | in_process | [tests/fixtures/steps/subworkflow_call/](../tests/fixtures/steps/subworkflow_call/) | Parent-side child workflow invoker |
-| `subworkflow_trigger` | trigger | in_process | [tests/fixtures/steps/subworkflow_trigger/](../tests/fixtures/steps/subworkflow_trigger/) | Child-side entry & eligibility trigger |
+`BaseStep[TInput, TOutput]` is the base execution contract, specialized as `ActionStep`,
+`TaskStep`, `WorkflowStep`, and `TriggerStep`. Typed inputs and outputs are Pydantic models.
+`ExecutionContext` carries workflow context to step logic without coupling it to a worker or
+transport, and `CredentialReference` / `BaseCredential` model the reference-only credential
+contract.
 
-Each example documents:
-- A complete `manifest.yaml` following K8s CRD structure
-- The descriptor fields used for registration and canvas metadata
-- A README with the step's contract and execution boundary
+## Reference Implementations
 
-Where an example has executable SDK code, its test suite demonstrates
-validation and registration. Platform-owned in-process composition steps may
-provide a descriptor and contract reference without a local runner.
+| Example | Category | Runtime image | Location |
+|---|---|---|---|
+| `http_request` | action | dedicated image | [tests/fixtures/steps/http_request/](../tests/fixtures/steps/http_request/) |
+| `script_executor` | task | generic runner + `entrypoint` | [tests/fixtures/steps/script_executor/](../tests/fixtures/steps/script_executor/) |
+| `subworkflow_call` | workflow | null (platform-owned) | [tests/fixtures/steps/subworkflow_call/](../tests/fixtures/steps/subworkflow_call/) |
+| `subworkflow_trigger` | trigger | null (platform-owned) | [tests/fixtures/steps/subworkflow_trigger/](../tests/fixtures/steps/subworkflow_trigger/) |
+
+Each carries a complete `manifest.yaml`, the descriptor fields used for registration and canvas
+metadata, and a README describing its contract and execution boundary. Where an example has
+executable code, its test suite demonstrates validation and registration. Platform-owned steps
+may ship a descriptor and contract reference with no local runner.
+
+## Gaps
+
+SDK-side gaps that nothing yet covers. Open questions live in the SDK SDP and
+are not mirrored here.
+
+- **No plugin manifest schema (R8).** R8 requires a root-level plugin manifest so the platform
+  can index an uploaded artifact. `common-definitions.json` defines only `StepTypeManifest`.
+  The plugin manifest needs its own definition: identity, version, and step metadata locations.
+- **Control-plane code loading and isolation.** Nothing defines how a control-plane-placed
+  step's code enters the orchestrator process, what sandboxing applies, or whether it is
+  restricted to first-party or pre-vetted code. Arbitrary author-supplied code in the control
+  plane is an open security question, sharper now that authors cannot influence placement.
+
+  *Candidate answer — dual-mode consumption.* Package every plugin the same way, and let the
+  artifact be consumed two ways off one contract. In execution-plane mode the container's `CMD`
+  launches the SDK runner, which imports `spec.execution.entrypoint` and calls the step through
+  its `BaseStep` subclass. In control-plane mode the orchestrator extracts the source from a
+  well-known path in the artifact and imports the same handle directly. Same code, same
+  entrypoint, same validation path; only the caller differs.
+
+  Two things recommend it. It matches the SDP, which already says every category — `workflow`
+  and `trigger` included — is wrapped in a plugin and published as an artifact. And it removes a
+  placement tell we reintroduced by accident: `execution.type` was deleted so manifests could
+  not declare placement, but `image: null` now correlates 1:1 with control-plane execution
+  across all four reference steps. Under dual-mode every step has an artifact and a handle, the
+  runtime image is optional, and placement stays the dispatcher's call (Q10).
+
+  It would also make `entrypoint` required unconditionally rather than only when `image` is set,
+  since the handle becomes the uniform element and the image the variable one.
+
+  It does not resolve the security question above — it presupposes an answer. Adopt only once
+  arbitrary author code in the control plane is settled.
+- **Multiple runtime images per step type.** `spec.execution.image` is a single string with no
+  override mechanism, so a step cannot offer per-platform variants and an administrator cannot
+  substitute a hardened base runner. Whether the runtime image belongs in the manifest at all,
+  or is bound at registration or workflow build time, is undecided.
+- **Trigger prototype does not fit R4.** R4 requires *every* step to expose `StandardOutputWrapper`, but a
+  trigger instantiates a workflow rather than returning a result to a downstream step, so the
+  requirement does not hold for one of the four categories. Needs either a carve-out in R4 or a
+  change to the trigger contract.
+- **Authoring guidance (AC-8 / R11).** Step creation, testing, validation, and composition
+  guidance is required by the SDP and does not exist yet.

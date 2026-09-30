@@ -13,6 +13,24 @@ from syntara_sdk.context import ExecutionContext
 from syntara_sdk.step import BaseStep
 
 
+def parse_entrypoint(entrypoint: str) -> tuple[str, str]:
+    """Split a manifest ``spec.execution.entrypoint`` into module and class.
+
+    The manifest form is ``module.path:ClassName``, resolving to a step inside
+    the plugin artifact. A plugin may package several steps, so the runtime
+    needs the handle to load the right one. It is deliberately not a shell
+    command: the step must be invoked *through* its base class so that input
+    validation and redaction checks still run.
+    """
+
+    module_path, separator, class_name = entrypoint.partition(":")
+    if not separator or not module_path or not class_name:
+        raise ValueError(
+            f"entrypoint must be 'module.path:ClassName', got {entrypoint!r}"
+        )
+    return module_path, class_name
+
+
 def load_step_class(module_path: str, class_name: str) -> type[BaseStep]:
     """Dynamically load a step class from a Python module.
 
@@ -124,14 +142,16 @@ Examples:
     )
 
     parser.add_argument(
+        "--entrypoint",
+        help="Manifest step handle, 'module.path:ClassName'",
+    )
+    parser.add_argument(
         "--module",
-        required=True,
         help="Python module path (e.g., 'examples.http_request.src.main')",
     )
     parser.add_argument(
         "--class",
         dest="class_name",
-        required=True,
         help="Step class name (e.g., 'HttpRequestStep')",
     )
 
@@ -163,9 +183,15 @@ Examples:
     args = parser.parse_args()
 
     try:
-        # Load step class
-        print(f"Loading step: {args.module}.{args.class_name}", file=sys.stderr)
-        step_class = load_step_class(args.module, args.class_name)
+        # Load step class, from the manifest entrypoint or an explicit pair
+        if args.entrypoint:
+            module_path, class_name = parse_entrypoint(args.entrypoint)
+        elif args.module and args.class_name:
+            module_path, class_name = args.module, args.class_name
+        else:
+            parser.error("provide --entrypoint, or both --module and --class")
+        print(f"Loading step: {module_path}:{class_name}", file=sys.stderr)
+        step_class = load_step_class(module_path, class_name)
 
         # Load inputs
         if args.inputs:

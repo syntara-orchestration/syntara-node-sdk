@@ -14,7 +14,7 @@ These are **platform-level tests**, not step-specific tests. They verify:
 - **Canvas integration** - `?view=palette` and `/descriptor` endpoints for UI
 - **Upsert behavior** - Re-publishing same (name, version) updates in place
 - **Name-addressable lookups** - Fetching by UUID or step name
-- **DDL constraints** - Container steps must have `image_ref`, in_process must not
+- **DDL constraints** - `(name, version)` is unique so step versions coexist
 
 ## Test Files
 

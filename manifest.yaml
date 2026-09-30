@@ -9,6 +9,10 @@ metadata:
   # Internal step identifier (snake_case) - used as primary key
   name: example_step
 
+  # Namespace grouping this step under its owning domain or vendor.
+  # namespace + name is the globally unique step identity.
+  namespace: syntara
+
   # Human-readable name displayed in UI palette and canvas
   displayName: Example Step
 
@@ -44,16 +48,22 @@ spec:
   # Sandbox, egress, and worker-pool policy are intentionally omitted here.
   # Administrators provide those controls in POST /api/v1/step-types.
 
-  # Execution configuration
+  # Runtime environment. This is the image the execution plane runs the step
+  # IN -- not the step's OCI distribution artifact. Manifests do not declare
+  # where a step runs; the Execution Plane determines placement from category,
+  # resource requirements, and administrative policy.
   execution:
-    # Type: container (isolated pod) | in_process (built-in activity)
-    type: container
+    # The runtime environment: an interpreter plus the SDK, named for what it
+    # provides. It holds no step code -- the implementations live in the plugin
+    # artifact. Usually a generic runner reused across steps and plugins; a
+    # step with unusual dependencies may warrant its own. Null if none needed.
+    image: quay.io/syntara/python-executor:1.0.0
 
-    # Container image reference (required for type: container)
-    image: registry.syntara.io/steps/example-step:1.0.0
-
-    # Optional process command. Use null for in_process steps.
-    entrypoint: null
+    # Step handle, "module.path:ClassName", resolving to this step's BaseStep
+    # subclass inside the plugin artifact. A plugin can package several steps,
+    # so the runtime uses this to load the right one. Not a shell command --
+    # a subprocess would bypass the base class's validation and redaction.
+    entrypoint: main:ExampleStep
 
   # Developer-declared extension requirements. These describe the capabilities
   # the extension needs and are inspected by administrators before execution.
@@ -104,13 +114,15 @@ spec:
         examples:
           - https://api.example.com/v1/resource
 
-      # Sensitive values must be explicitly marked so the execution plane can
-      # split them from plain inputs into the stdin credentials map and apply
-      # its logging and persistence guarantees using the same schema flag.
-      api_key:
+      # Non-credential sensitive data (PII, business-sensitive fields) is
+      # flagged with redact: true. The value is supplied as a normal input; the
+      # platform keeps it out of outputs, logs, errors, and persisted state.
+      # Authentication credentials must NOT be declared here -- use
+      # spec.credentialSpecification.credential_references instead.
+      customer_email:
         type: string
-        description: API key supplied to the step at runtime
-        secret: true
+        description: Customer email address used to look up the record
+        redact: true
 
       # Example: Enum with default
       method:
@@ -150,7 +162,7 @@ spec:
         type: string
         description: Credential UUID reference
         format: uuid
-        secret: false
+        redact: false
         examples:
           - 550e8400-e29b-41d4-a716-446655440000
 
@@ -174,8 +186,11 @@ spec:
   # Execution timeout in seconds (default: 300)
   executionTimeout: 60
 
-  # Credential access specification
-  # action: deterministic, scripted - can access infrastructure credentials
-  # agentic: LLM-driven - blocked from infrastructure credentials (prompt injection mitigation)
+  # Authentication credentials. References are UUIDs only -- never credential
+  # values. The platform resolves and injects them out of band; the step never
+  # receives them as inputs.
   credentialSpecification:
-    workloadClassification: action
+    credential_references:
+      - credential_id: 550e8400-e29b-41d4-a716-446655440000
+        credential_mount_type: header
+        credential_header_name: Authorization

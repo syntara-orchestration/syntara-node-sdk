@@ -2,7 +2,7 @@
 
 **Category:** `trigger`
 
-**Execution type:** `in_process`
+**Artifact:** none — platform-owned control-plane implementation
 
 **Feature:** Reference-mode subworkflow invocation
 
@@ -19,7 +19,7 @@ The child-side trigger:
 - defines the child workflow's terminal output contract;
 - identifies the workflow as eligible for Reference-mode invocation when the
   trigger is active; and
-- runs as an in-process control-plane activity with no container image.
+- ships with the control plane and declares no image artifact.
 
 The parent-side `subworkflow_call` step owns workflow selection, dynamic form
 construction, permission checks, synchronous invocation, and mapping the child
@@ -36,7 +36,6 @@ uses that schema to populate the parent caller's configurable form fields.
 spec:
   category: trigger
   execution:
-    type: in_process
     image: null
   inputs:
     type: object
@@ -69,7 +68,7 @@ reaches a terminal state, its output is returned through the parent's
 
 ## Production execution path
 
-`in_process` steps are implemented as built-in control-plane activities. The
+Steps with no image artifact are implemented as built-in control-plane activities. The
 SDK manifest supplies metadata and contracts; it does not start a container or
 invoke a child workflow itself. The production orchestration layer owns
 workflow registration, eligibility checks, permission checks, and the child

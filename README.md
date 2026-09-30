@@ -1,4 +1,4 @@
-# Syntara Step SDK
+# Syntara Plugin SDK
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
@@ -9,7 +9,7 @@ A schema-driven framework for authoring, packaging, and registering custom autom
 ## Features
 
 - **🎯 Type-Safe Authoring** — Author steps in human-friendly YAML with JSON Schema validation (Draft-07)
-- **🔒 Zero-Trust Security** — Credential references only; sensitive values are separated into the transient stdin `credentials` map, with runtime injection and persistence safeguards owned by the execution plane
+- **🔒 Zero-Trust Security** — Authentication credentials are platform-managed UUID references, never step inputs; non-credential sensitive data is flagged `redact: true` and kept out of outputs, logs, and persisted state
 - **📦 Four-Category Taxonomy** — `action` (integrations), `task` (compute), `workflow` (control flow), `trigger` (events)
 - **⚡ Fast Canvas Rendering** — Compiled step definitions enable <500ms dynamic form rendering
 - **🔌 Kubernetes-Native** — Follows K8s CRD conventions (`apiVersion`, `kind`, `metadata`, `spec`)
@@ -69,6 +69,7 @@ kind: StepType
 
 metadata:
   name: my_http_step
+  namespace: syntara
   displayName: My HTTP Step
   version: 1.0.0
   icon: globe
@@ -81,8 +82,8 @@ metadata:
 spec:
   category: action
   execution:
-    type: container
-    image: registry.example.com/steps/my-http-step:1.0.0
+    image: quay.io/syntara/http-request-executor:latest
+    entrypoint: src.main:MyHttpStep
 
   declaredRequirements:
     capabilities:
@@ -189,17 +190,21 @@ graph LR
 
 ### Step Categories
 
-| Category | Purpose | Execution | Examples |
-|----------|---------|-----------|----------|
-| **action** | External API integrations | `container` | HTTP requests, GitHub issues, Slack messages |
-| **task** | Atomic compute operations | `container` | Script executor, data transformation |
-| **workflow** | Control flow and composition logic | `in_process` | Loops, conditions, switches, subworkflow calls |
-| **trigger** | Event entry points | `in_process` | Webhooks, schedules, subworkflow triggers |
+| Category | Purpose | Examples |
+|----------|---------|----------|
+| **action** | External API integrations | HTTP requests, GitHub issues, Slack messages |
+| **task** | Atomic compute operations | Script executor, data transformation |
+| **workflow** | Control flow and composition logic | Loops, conditions, switches, subworkflow calls |
+| **trigger** | Event entry points | Webhooks, schedules, subworkflow triggers |
 
-### Execution Types
+### Execution Placement
 
-- **`in_process`** — Runs as a built-in workflow activity inside the orchestrator (zero pod overhead)
-- **`container`** — Hands the step contract to the execution plane for isolated execution
+Manifests do not declare where a step runs. The Execution Plane derives placement from the
+step's category, resource requirements, declared capabilities, and administrative registration
+policy. `spec.execution.image` names the runtime the execution plane runs the step *in* -- an
+interpreter plus the SDK, holding no step code. The step implementations live in the plugin
+artifact, and `spec.execution.entrypoint` (`module.path:ClassName`) selects which one to load.
+See [Dispatch and Handoff](docs/architecture.md#dispatch-and-handoff).
 
 ## Examples
 
@@ -232,19 +237,18 @@ python -m syntara_sdk.runner \
 
 ### Zero-Trust Credentials
 
-Step manifests and compiled descriptors store only abstract credential references, never credential values. Credential references are passed to the execution plane so resolved values can be carried separately from plain inputs in the transient stdin payload:
+Authentication credentials are never step inputs. Manifests and compiled descriptors store abstract UUID references only; the execution plane resolves them and supplies the values out of band:
 
 ```yaml
 spec:
   credentialSpecification:
-    workloadClassification: action
     credential_references:
       - credential_id: 550e8400-e29b-41d4-a716-446655440000
         credential_mount_type: tmpfs_file
         credential_mount_path: /tmp/api-key
 ```
 
-At dispatch time, the SDK contract separates sensitive input values from plain `inputs` and places the resolved values in the `credentials` map of the single JSON stdin invocation. The execution plane owns how those credentials are injected, logged, scrubbed, and persisted.
+Non-credential sensitive data (PII, business-sensitive fields) *is* supplied as a normal input, flagged `redact: true`. Neither a credential value nor a `redact`-flagged value may appear in `StandardOutputWrapper` fields, workflow variables, error messages, stack traces, execution logs, or persisted state. The platform dispatcher and execution plane enforce this and are the authoritative security boundary; SDK base classes additionally check that a step does not echo a flagged input into its output.
 
 ### Declarative Permissions
 

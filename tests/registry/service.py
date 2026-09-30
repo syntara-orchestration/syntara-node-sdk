@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 from syntara_tools.compiler import compile_manifest_data, validate_manifest
 
-from tests.registry.models import StepCategory, StepExecutionType, StepType
+from tests.registry.models import StepCategory, StepType
 
 OCI_ARTIFACT_TYPE = "application/vnd.syntara.step.manifest.v1+yaml"
 OCI_MANIFEST_ANNOTATION = "org.syntara.step.manifest"
@@ -39,25 +39,9 @@ class RegistryService:
         descriptor = compile_manifest_data(dict(manifest))
         metadata = descriptor["metadata"]
         spec = descriptor["spec"]
-        execution = spec["execution"]
-        execution_type = StepExecutionType(execution["type"])
-
-        if execution_type is StepExecutionType.IN_PROCESS:
-            if image_ref is not None:
-                raise ValueError("in_process steps cannot register an image reference")
-            resolved_image = None
-        else:
-            resolved_image = image_ref if image_ref is not None else execution.get("image")
-            if not resolved_image:
-                raise ValueError("container steps require spec.execution.image")
-
-        descriptor = {
-            **descriptor,
-            "spec": {
-                **spec,
-                "execution": {**execution, "image": resolved_image},
-            },
-        }
+        # image_ref is where the plugin artifact was published. It is a
+        # different thing from spec.execution.image, the runtime the step runs
+        # in, so neither is derived from or written over the other.
 
         name = metadata["name"]
         version = metadata["version"]
@@ -70,8 +54,7 @@ class RegistryService:
 
         row.display_name = metadata["displayName"]
         row.category = StepCategory(spec["category"])
-        row.execution_type = execution_type
-        row.image_ref = resolved_image
+        row.image_ref = image_ref
         row.descriptor = descriptor
         row.enabled = True
         row.updated_at = datetime.now(UTC)

@@ -1,8 +1,7 @@
 # Script Executor Step
 
 **Category:** `task`  
-**Execution Type:** `container`  
-**Workload Classification:** `action`
+**Artifact:** `quay.io/syntara/script-python-executor:latest`  
 
 Executes Python 3.12 or Bash 5.2 scripts in isolated, unprivileged containers with credential injection, network egress controls, and custom resource limits.
 
@@ -282,13 +281,13 @@ syntara-sdk build
 ### Registry Publication
 ```bash
 syntara-sdk publish \
-  --image registry.syntara.io/steps/script-executor:1.0.0 \
+  --image quay.io/syntara/script-python-executor:latest \
   --definition step-definition.json
 ```
 
 ### Containerfile Example
 ```dockerfile
-FROM python:3.12-slim
+FROM docker.io/library/python:3.12-slim
 
 # Install Bash (for bash language support)
 RUN apt-get update && apt-get install -y bash && rm -rf /var/lib/apt/lists/*
@@ -302,7 +301,8 @@ RUN mkdir -p /workspace && chmod 777 /workspace
 # Run as non-root user
 USER 1000:1000
 
-ENTRYPOINT ["python3", "/app/main.py"]
+# Launch via the SDK runner so the step goes through BaseStep validation.
+CMD ["python", "-m", "syntara_sdk.runner", "--entrypoint", "main:ScriptExecutorStep"]
 ```
 
 ## Error Handling

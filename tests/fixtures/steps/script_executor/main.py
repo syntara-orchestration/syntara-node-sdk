@@ -4,9 +4,9 @@ Script Executor Step - Reference Implementation
 
 Executes Python 3.12 or Bash 5.2 scripts in an isolated container.
 Demonstrates the language-agnostic execution contract:
-- Reads JSON inputs
+- Validates typed inputs through the SDK base class
 - Executes user-provided code
-- Returns StandardOutputWrapper JSON
+- Returns StandardOutputWrapper
 """
 
 import json
@@ -14,15 +14,18 @@ import os
 import subprocess
 import sys
 import tempfile
-from typing import Any, Dict
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+from syntara_sdk import ExecutionContext, TaskStep
 
 
-def load_inputs() -> Dict[str, Any]:
+def load_inputs() -> dict[str, Any]:
     """Load step inputs from JSON file or stdin."""
     input_path = os.environ.get("NODE_INPUT_PATH", "/tmp/step_input.json")
 
     if os.path.exists(input_path):
-        with open(input_path, "r") as f:
+        with open(input_path) as f:
             return json.load(f)
 
     return json.load(sys.stdin)
@@ -30,10 +33,10 @@ def load_inputs() -> Dict[str, Any]:
 
 def execute_python_script(
     script: str,
-    arguments: Dict[str, Any],
-    env_vars: Dict[str, str],
+    arguments: dict[str, Any],
+    env_vars: dict[str, str],
     working_dir: str
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Execute Python script with named arguments.
 
@@ -139,9 +142,9 @@ except Exception as e:
 def execute_bash_script(
     script: str,
     arguments: list,
-    env_vars: Dict[str, str],
+    env_vars: dict[str, str],
     working_dir: str
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Execute Bash script with positional arguments.
     """
@@ -202,7 +205,7 @@ def execute_bash_script(
         os.unlink(script_path)
 
 
-def execute_script(inputs: Dict[str, Any]) -> Dict[str, Any]:
+def execute_script(inputs: dict[str, Any]) -> dict[str, Any]:
     """Route to Python or Bash executor based on language input."""
     script = inputs["script"]
     language = inputs.get("language", "python3")
@@ -226,27 +229,63 @@ def execute_script(inputs: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
-def main():
-    """Step execution entrypoint."""
-    try:
-        inputs = load_inputs()
-        result = execute_script(inputs)
+class ScriptExecutorInput(BaseModel):
+    """Typed inputs mirroring spec.inputs in manifest.yaml."""
 
-        # Write StandardOutputWrapper to stdout
-        print(json.dumps(result, indent=2))
-        sys.exit(result["StatusCode"])
+    script: str = Field(min_length=1, max_length=1_048_576)
+    language: Literal["python3", "bash"] = "python3"
+    arguments: dict[str, Any] | list[str] | None = None
+    environment_variables: dict[str, str] | None = Field(
+        default=None, json_schema_extra={"redact": True}
+    )
+    working_directory: str = "/workspace"
 
-    except Exception as e:
-        # Fatal error during input parsing
-        error_output = {
-            "Result": None,
-            "StatusCode": 255,
-            "StatusMessage": "Step execution failed",
-            "ErrorMessage": f"Fatal error: {type(e).__name__}: {str(e)}"
-        }
-        print(json.dumps(error_output, indent=2))
-        sys.exit(255)
+
+class ScriptExecutorOutput(BaseModel):
+    """Inner Result payload; BaseStep wraps it in StandardOutputWrapper."""
+
+    stdout: str = ""
+    stderr: str = ""
+    exit_code: int = 0
+
+
+class ScriptExecutorStep(TaskStep[ScriptExecutorInput, ScriptExecutorOutput]):
+    """Run a Python or Bash script supplied as step input."""
+
+    def __init__(self) -> None:
+        super().__init__(ScriptExecutorInput, ScriptExecutorOutput)
+
+    def run(
+        self, inputs: ScriptExecutorInput, context: ExecutionContext
+    ) -> ScriptExecutorOutput:
+        default_args: Any = {} if inputs.language == "python3" else []
+        envelope = execute_script(
+            {
+                "script": inputs.script,
+                "language": inputs.language,
+                "arguments": inputs.arguments if inputs.arguments is not None else default_args,
+                "environment_variables": inputs.environment_variables or {},
+                "working_directory": inputs.working_directory,
+            }
+        )
+        if envelope["StatusCode"] != 0:
+            raise RuntimeError(envelope["ErrorMessage"] or envelope["StatusMessage"])
+        result = envelope["Result"] or {}
+        return ScriptExecutorOutput(
+            stdout=result.get("stdout", ""),
+            stderr=result.get("stderr", ""),
+            exit_code=result.get("exit_code", 0),
+        )
+
+
+def main() -> int:
+    """Local convenience runner; the platform loads ScriptExecutorStep directly."""
+
+    raw = json.load(sys.stdin)
+    output = ScriptExecutorStep().execute_raw(raw)
+    print(json.dumps(output.model_dump(), indent=2))
+    return output.StatusCode
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
