@@ -12,9 +12,6 @@ metadata:
   # Human-readable name displayed in UI palette and canvas
   displayName: Example Step
 
-  # Semantic version of this step contract within its parent plugin
-  version: 1.0.0
-
   # Icon identifier for React Flow palette (see StepPaletteIcon in common-definitions.json)
   # Options: globe, database, script, webhook, loop, condition, git, cloud, mail, etc.
   icon: cube

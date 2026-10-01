@@ -42,7 +42,7 @@ def test_inspect_reads_annotation_without_fetching_layers(tmp_path: Path) -> Non
 
 def test_discover_lists_only_annotated_step_images() -> None:
     manifest = {
-        "metadata": {"name": "market-step", "displayName": "Market Step", "version": "1.0.0"},
+        "metadata": {"name": "market-step", "displayName": "Market Step"},
         "spec": {"category": "task", "execution": {"type": "container", "image": "ignored"}},
     }
     artifact = _artifact(manifest)

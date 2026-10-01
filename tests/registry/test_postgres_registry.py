@@ -355,7 +355,8 @@ def create_app(engine) -> FastAPI:
         # This isolated registry prototype predates plugin registration. The
         # parent plugin would supply this namespace in the real discovery path.
         namespace = "syntara"
-        version = metadata["version"]
+        # Plugin registration supplies this value; steps have no independent version.
+        version = "1.0.0"
         # Where the plugin artifact lives. Distinct from spec.execution.image,
         # which names the runtime the step executes in.
 

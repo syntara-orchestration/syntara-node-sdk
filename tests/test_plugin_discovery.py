@@ -41,14 +41,13 @@ def test_plugin_discovery_apis_are_exported_from_root_facade() -> None:
     assert issubclass(PluginDiscoveryError, ValueError)
 
 
-def _step(name: str, category: str = "action", version: str = "1.0.0") -> dict[str, Any]:
+def _step(name: str, category: str = "action") -> dict[str, Any]:
     return {
         "apiVersion": "syntara.io/v1alpha1",
         "kind": "StepType",
         "metadata": {
             "name": name,
             "displayName": name.replace("_", " ").title(),
-            "version": version,
             "description": "A test step.",
         },
         "spec": {
@@ -96,6 +95,8 @@ def test_discovers_ordered_multistep_plugin_and_canonical_identity(tmp_path: Pat
 
     descriptor = discover_plugin(plugin_path)
 
+    assert descriptor.manifest["metadata"]["version"] == "0.1.0"
+    assert all("version" not in step.manifest["metadata"] for step in descriptor.steps)
     assert [step.manifest["metadata"]["name"] for step in descriptor.steps] == ["second", "first"]
     assert [step.identity for step in descriptor.steps] == [
         "example/sample/second",
@@ -140,10 +141,10 @@ def test_category_must_be_a_valid_scalar(category: object) -> None:
     assert any("category" in error for error in validate_manifest(step))
 
 
-def test_step_authors_are_optional_and_step_version_is_required() -> None:
+def test_step_authors_are_optional_and_step_version_is_rejected() -> None:
     step = _step("example_step")
     assert validate_manifest(step) == []
-    del step["metadata"]["version"]
+    step["metadata"]["version"] = "1.0.0"
     assert any("version" in error for error in validate_manifest(step))
 
 

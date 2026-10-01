@@ -13,7 +13,7 @@ def test_init_tier_two_creates_script_package(tmp_path: Path) -> None:
     assert (target / "main.py").exists()
     assert (target / "manifest.yaml").exists()
     manifest = yaml.safe_load((target / "manifest.yaml").read_text())
-    assert manifest["metadata"]["version"] == "0.1.0"
+    assert "version" not in manifest["metadata"]
     assert "namespace" not in manifest["metadata"]
     assert manifest["metadata"]["tags"] == []
 

@@ -72,7 +72,6 @@ kind: StepType
 metadata:
   name: my_http_step
   displayName: My HTTP Step
-  version: 1.0.0
   icon: globe
   description: Custom HTTP request step with retry logic
   tags:

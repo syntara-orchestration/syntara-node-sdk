@@ -3,7 +3,6 @@ kind: StepType
 metadata:
   name: list_workspaces
   displayName: List Workspaces
-  version: 1.0.0
   description: Lists workspaces.
 spec:
   category: workflow

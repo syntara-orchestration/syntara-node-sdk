@@ -4,7 +4,6 @@ kind: StepType
 metadata:
   name: script_executor
   displayName: Python Script Executor
-  version: 1.0.0
   icon: terminal
   description: Executes a Python or Bash script in the shared script runner.
   tags:

@@ -4,7 +4,6 @@ kind: StepType
 metadata:
   name: subworkflow_call
   displayName: Subworkflow Call
-  version: 1.0.0
   icon: project-diagram
   description: Parent-side in-process caller for Reference-mode child workflow composition.
   tags:

@@ -40,7 +40,6 @@ def _manifest(name: str, tier: int, image: str) -> dict[str, Any]:
         "metadata": {
             "name": name,
             "displayName": name.replace("_", " ").title(),
-            "version": "0.1.0",
             "icon": "terminal",
             "description": f"Custom tier {tier} step.",
             "tags": [],
@@ -177,7 +176,6 @@ def _oci_manifest(manifest: dict[str, Any], image_ref: str) -> dict[str, Any]:
         "annotations": {
             OCI_MANIFEST_ANNOTATION: raw_yaml,
             "org.opencontainers.image.title": manifest["metadata"]["name"],
-            "org.opencontainers.image.version": manifest["metadata"]["version"],
             "org.opencontainers.image.ref.name": image_ref,
         },
     }

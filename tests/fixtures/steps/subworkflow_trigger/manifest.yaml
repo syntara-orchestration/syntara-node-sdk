@@ -4,7 +4,6 @@ kind: StepType
 metadata:
   name: subworkflow_trigger
   displayName: Sub-Workflow Trigger
-  version: 1.0.0
   icon: bolt
   description: Child-side entry trigger that makes a workflow eligible for Reference-mode subworkflow invocation.
   tags:

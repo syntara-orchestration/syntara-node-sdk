@@ -44,7 +44,7 @@ contains one or more explicitly listed step manifests. A step's canonical identi
 `<plugin-namespace>/<plugin-name>/<step-name>`; consequently, moving a step between plugins
 changes its identity. Step names are unique only within a plugin, so different plugins may use
 the same step name. The namespace comes exclusively from the parent `plugin.yaml`; a step manifest
-declares only its local name and version.
+declares only its local name.
 
 ## Ownership Boundaries
 
@@ -75,9 +75,9 @@ in plugin records or stores separate step records.
    they run on.
 4. **Declaration is not authorization.** `spec.declaredRequirements` states what a step needs.
    Administrators grant the corresponding controls at registration time in Syntara.
-5. **Version both contracts explicitly.** The plugin version identifies a release of the plugin
-   as a whole. Each step version identifies the revision of that local step contract within the
-   plugin. Neither version changes the derived canonical step identity.
+5. **Version the plugin as a unit.** The plugin version identifies a release of the plugin and all
+   step contracts it contains. Steps have no independent version; changing any contained step
+   requires a new plugin version. Version does not change the derived canonical step identity.
 6. **Zero-trust credentials.** Authentication credentials are platform-managed references
    (UUIDs), never step inputs. Non-credential sensitive data may be an input flagged
    `redact: true`, which the platform must keep out of every observable path.
@@ -189,7 +189,6 @@ kind: StepType
 metadata:
   name: http_request
   displayName: HTTP Request
-  version: 1.0.0
   icon: globe
   description: |
     HTTP/HTTPS API orchestrator with credential injection, response parsing,
@@ -259,7 +258,7 @@ graph TB
 
     subgraph CRD["CRD Structure"]
         API["apiVersion + kind"]
-        META["metadata<br/>• name, displayName, version<br/>• icon, description, tags"]
+        META["metadata<br/>• name, displayName<br/>• icon, description, tags"]
         SPEC["spec"]
     end
 
@@ -359,7 +358,7 @@ The SDK prescribes no database schema, ORM, persistence technology, or REST rout
 registration makes validated plugin descriptors available to platform consumers that can:
 
 - retain a validated descriptor or equivalent canonical representation;
-- expose canonical step identity, category, step version, and parent plugin metadata;
+- expose canonical step identity, category, and parent plugin metadata;
 - serve input and output schemas to the canvas and the execution plane;
 - keep administrative registration policy separate from developer-authored manifests; and
 - meet the `<500 ms` canvas target without remote artifact fetches during editing.
@@ -371,7 +370,6 @@ as:
 ```json
 {
   "step_identity": "syntara/utility_steps/script_executor",
-  "step_version": "1.0.0",
   "category": "task",
   "plugin": {
     "namespace": "syntara",
@@ -384,9 +382,8 @@ as:
 }
 ```
 
-Canonical identity and plugin metadata come from the root plugin descriptor; category and step
-version come from the targeted step descriptor. `sandbox_required`, `egress_policy`, and
-`worker_pool_selector` are
+Canonical identity and plugin metadata come from the root plugin descriptor; category comes from
+the targeted step descriptor. `sandbox_required`, `egress_policy`, and `worker_pool_selector` are
 administrator-supplied and are never read from developer metadata.
 
 ## Dispatch and Handoff
@@ -652,7 +649,7 @@ descriptors rather than the source manifest.
 | Definition | Purpose | Shape |
 |---|---|---|
 | `PluginManifest` | Root plugin validation | `{apiVersion, kind, metadata, spec.targets}`; plugin metadata requires name, namespace, displayName, version, description, and non-empty authors |
-| `StepTypeManifest` | K8s CRD structure validation | `{apiVersion, kind, metadata, spec}`; step metadata requires `name`, `displayName`, `version`, and `description`; namespace is derived from the parent plugin |
+| `StepTypeManifest` | K8s CRD structure validation | `{apiVersion, kind, metadata, spec}`; step metadata requires `name`, `displayName`, and `description`; namespace and release version come exclusively from the parent plugin |
 | `Author` / `Authors` | Attribution | author name is required; email and URL are optional; plugin authors are required while step authors are optional |
 | `StepCategory` | Four-category taxonomy | `enum: ["action", "task", "workflow", "trigger"]` |
 | `StepInputs` | Draft-07 input object | `{properties, required}` |
@@ -680,7 +677,6 @@ is the natural hook for the Temporal durable-execution question (SDP Q8).
   "metadata": {
     "name": "http_request",
     "displayName": "HTTP Request",
-    "version": "1.0.0",
     "icon": "globe",
     "description": "...",
     "tags": ["integration:rest-api", "network:external"]
@@ -730,8 +726,8 @@ are not mirrored here.
 - **Workflow step-reference resolution.** The canonical identity is derived as
   `namespace/plugin/step`, but workflows should not reconstruct it from fields copied into the
   step manifest. The workflow contract must decide whether it stores an opaque installed-step ID
-  or a structured plugin reference plus local step name and version. Future packaging work must
-  also decide whether plugin version, immutable artifact identity, or both are pinned.
+  or a structured plugin reference plus local step name. It must also decide whether plugin
+  version, immutable artifact identity, or both are pinned.
 - **Control-plane code loading and isolation.** Nothing defines how a control-plane-placed
   step's code enters the orchestrator process, what sandboxing applies, or whether it is
   restricted to first-party or pre-vetted code. Arbitrary author-supplied code in the control

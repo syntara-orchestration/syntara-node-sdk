@@ -33,6 +33,7 @@ class RegistryService:
         manifest: Mapping[str, Any],
         *,
         plugin_namespace: str,
+        plugin_version: str,
         image_ref: str | None = None,
     ) -> StepType:
         """Register a raw YAML/JSON manifest from the Git or REST path."""
@@ -46,7 +47,9 @@ class RegistryService:
 
         name = metadata["name"]
         namespace = plugin_namespace
-        version = metadata["version"]
+        # The legacy model calls this column ``version``; it stores the parent
+        # plugin version and is never sourced from step metadata.
+        version = plugin_version
         row = self.session.exec(
             select(StepType)
             .where(StepType.namespace == namespace)
@@ -79,6 +82,7 @@ class RegistryService:
         payload: str | bytes,
         *,
         plugin_namespace: str,
+        plugin_version: str,
         image_ref: str | None = None,
     ) -> StepType:
         """Parse and register a raw Git or REST YAML/JSON request body."""
@@ -90,7 +94,10 @@ class RegistryService:
         if not isinstance(manifest, Mapping):
             raise TypeError("manifest payload must contain a mapping")
         return self.register_manifest(
-            manifest, plugin_namespace=plugin_namespace, image_ref=image_ref
+            manifest,
+            plugin_namespace=plugin_namespace,
+            plugin_version=plugin_version,
+            image_ref=image_ref,
         )
 
     def register_oci_manifest(
@@ -99,6 +106,7 @@ class RegistryService:
         oci_manifest: Mapping[str, Any],
         *,
         plugin_namespace: str,
+        plugin_version: str,
     ) -> StepType:
         """Inspect OCI artifact metadata and register its embedded manifest."""
 
@@ -114,7 +122,10 @@ class RegistryService:
         if not isinstance(manifest, Mapping):
             raise TypeError("OCI step annotation does not contain a manifest mapping")
         return self.register_manifest(
-            manifest, plugin_namespace=plugin_namespace, image_ref=image_ref
+            manifest,
+            plugin_namespace=plugin_namespace,
+            plugin_version=plugin_version,
+            image_ref=image_ref,
         )
 
     def register_oci_headers(
@@ -123,11 +134,15 @@ class RegistryService:
         headers: Mapping[str, Any],
         *,
         plugin_namespace: str,
+        plugin_version: str,
     ) -> StepType:
         """Compatibility entry point for callers naming OCI metadata headers."""
 
         return self.register_oci_manifest(
-            image_ref, headers, plugin_namespace=plugin_namespace
+            image_ref,
+            headers,
+            plugin_namespace=plugin_namespace,
+            plugin_version=plugin_version,
         )
 
 
