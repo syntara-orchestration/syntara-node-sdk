@@ -32,7 +32,7 @@ def session():
 
 def test_register_manifest_persists_dispatch_columns(session: Session) -> None:
     manifest = load_manifest(TESTS_DIR / "fixtures" / "steps" / "subworkflow_trigger" / "manifest.yaml")
-    row = RegistryService(session).register_manifest(manifest)
+    row = RegistryService(session).register_manifest(manifest, plugin_namespace="syntara")
 
     assert row.category == "trigger"
     assert row.image_ref is None
@@ -41,7 +41,9 @@ def test_register_manifest_persists_dispatch_columns(session: Session) -> None:
 
 def test_register_manifest_payload_accepts_raw_yaml(session: Session) -> None:
     manifest_path = TESTS_DIR / "fixtures" / "steps" / "subworkflow_trigger" / "manifest.yaml"
-    row = RegistryService(session).register_manifest_payload(manifest_path.read_bytes())
+    row = RegistryService(session).register_manifest_payload(
+        manifest_path.read_bytes(), plugin_namespace="syntara"
+    )
     assert row.name == "subworkflow_trigger"
 
 
@@ -53,7 +55,7 @@ def test_oci_registration_reads_standard_artifact_annotation(session: Session) -
     }
 
     row = RegistryService(session).register_oci_manifest(
-        "quay.io/example/script:1.0.0", oci_manifest
+        "quay.io/example/script:1.0.0", oci_manifest, plugin_namespace="syntara"
     )
     assert row.category == "task"
     assert row.image_ref == "quay.io/example/script:1.0.0"
@@ -68,18 +70,18 @@ def test_oci_registration_rejects_non_step_artifact(session: Session) -> None:
         RegistryService(session).register_oci_manifest(
             "quay.io/example/other:1.0.0",
             {"artifactType": "application/octet-stream", "annotations": {}},
+            plugin_namespace="syntara",
         )
 
 
 def test_same_step_name_coexists_across_namespaces(session: Session) -> None:
-    """namespace + name is the identity, so two vendors may both ship http_request."""
+    """This legacy prototype key permits the same name in different namespaces."""
 
     manifest = load_manifest(TESTS_DIR / "fixtures" / "steps" / "http_request" / "manifest.yaml")
     service = RegistryService(session)
 
-    first = service.register_manifest(manifest)
-    other = {**manifest, "metadata": {**manifest["metadata"], "namespace": "acme"}}
-    second = service.register_manifest(other)
+    first = service.register_manifest(manifest, plugin_namespace="syntara")
+    second = service.register_manifest(manifest, plugin_namespace="acme")
 
     assert first.id != second.id
     assert {first.namespace, second.namespace} == {"syntara", "acme"}

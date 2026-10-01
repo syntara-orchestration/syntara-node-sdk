@@ -3,7 +3,6 @@ from pathlib import Path
 
 import httpx
 import yaml
-
 from syntara_tools.cli import init_step, push_step
 from syntara_tools.oci_client import (
     OCI_ARTIFACT_TYPE,
