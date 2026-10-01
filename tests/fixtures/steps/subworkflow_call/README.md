@@ -2,7 +2,7 @@
 
 **Category:** `workflow`
 
-**Execution type:** `in_process`
+**Artifact:** none — platform-owned control-plane implementation
 
 **Feature:** Reference-mode subworkflow invocation
 

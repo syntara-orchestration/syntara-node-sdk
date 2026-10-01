@@ -25,8 +25,7 @@
 The prototype wires three layers together:
 
 1. **Storage** - a ``StepType`` SQLModel table matching the target platform DDL,
-   including the ``CHECK (execution_type != 'container' OR image_ref IS NOT NULL)``
-   constraint. The ``descriptor`` column is JSONB on PostgreSQL and falls back to
+   with ``descriptor`` stored as JSONB on PostgreSQL, falling back to
    generic JSON on SQLite so the same model runs in-memory in CI.
 2. **SDK pipeline** - load ``manifest.yaml``, validate it against
    ``common-definitions.json`` (Draft-07, via ``$ref``), and compile it into the
@@ -39,7 +38,7 @@ The prototype wires three layers together:
      * ``POST /api/v1/step-types``                    - register (ingests a
        YAML/JSON manifest, validates, compiles, upserts). Returns ``{data: record}``.
      * ``GET  /api/v1/step-types``                    - list envelope; filter by
-       ``category`` / ``execution_type`` / ``enabled``; ``?view=palette`` returns
+       ``category`` / ``enabled``; ``?view=palette`` returns
        the React Flow drawer summaries instead of the record projection.
      * ``GET  /api/v1/step-types/{id_or_name}``       - fetch one record; the path
        accepts a UUID *or* a step ``name`` (the UI-facing alias).
@@ -81,7 +80,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 from sqlmodel import (
-    CheckConstraint,
     Column,
     Field,
     Session,
@@ -103,12 +101,6 @@ SCHEMAS_ROOT = REPO_ROOT / "schemas"
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "steps"
 MANIFEST_PATH = FIXTURES_DIR / "http_request" / "manifest.yaml"
 COMPILED_PATH = REGISTRY_TESTS_DIR / "step-definition.json"
-
-# Shared, hardened execution-plane HTTP executor image. A real build pipeline
-# injects the freshly built image ref at compile/publish time (see
-# build-manifest.sh: `syntara-sdk publish --image <image-ref>`); the register endpoint
-# uses this as the default for container steps when the caller supplies none.
-DEFAULT_CONTAINER_IMAGE = "quay.io/ahetheri/http-executor:dev"
 
 # Point this at a reachable PostgreSQL to run the DB-configuration path against a
 # real JSONB column + DDL CHECK instead of the in-memory SQLite default.
@@ -138,11 +130,6 @@ class StepCategory(StrEnum):
     TRIGGER = "trigger"
 
 
-class StepExecutionType(StrEnum):
-    IN_PROCESS = "in_process"
-    CONTAINER = "container"
-
-
 class RegistryModel(SQLModel):
     """Base with a private MetaData so this prototype's ``step_types`` table does
     not collide with the identically named table in the sibling
@@ -155,21 +142,19 @@ class StepType(RegistryModel, table=True):
     """Registry record for one compiled step definition.
 
     The ``descriptor`` column stores the full compiled ``step-definition.json``
-    so the canvas can render input forms without a frontend deployment. The
-    CHECK constraint ties container execution to a resolvable image reference,
-    and ``(name, version)`` is unique so multiple versions of a step can coexist.
+    so the canvas can render input forms without a frontend deployment.
+    ``(name, version)`` is unique so multiple versions of a step can coexist.
     """
 
     __tablename__ = "step_types"
     __table_args__ = (
-        UniqueConstraint("name", "version", name="uq_step_types_name_version"),
-        CheckConstraint(
-            "execution_type != 'container' OR image_ref IS NOT NULL",
-            name="step_types_container_requires_image_ref",
+        UniqueConstraint(
+            "namespace", "name", "version", name="uq_step_types_namespace_name_version"
         ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    namespace: str = Field(index=True)
     name: str = Field(index=True)
     display_name: str
     version: str = Field(default="1.0.0")
@@ -184,16 +169,6 @@ class StepType(RegistryModel, table=True):
                 values_callable=lambda e: [m.value for m in e],
             ),
             index=True,
-            nullable=False,
-        )
-    )
-    execution_type: StepExecutionType = Field(
-        sa_column=Column(
-            SAEnum(
-                StepExecutionType,
-                native_enum=False,
-                values_callable=lambda e: [m.value for m in e],
-            ),
             nullable=False,
         )
     )
@@ -270,9 +245,9 @@ def _palette_summary(row: StepType) -> dict[str, Any]:
     icon = metadata.get("icon") or ICON_BY_CATEGORY.get(str(row.category), "cube")
     return {
         "name": row.name,
+        "namespace": row.namespace,
         "displayName": row.display_name,
         "category": str(row.category),
-        "executionType": str(row.execution_type),
         "version": row.version,
         "description": _summarize_whitespace(metadata.get("description", "")),
         "icon": icon,
@@ -284,8 +259,8 @@ def _list_item(row: StepType) -> dict[str, Any]:
     return {
         "id": str(row.id),
         "name": row.name,
+        "namespace": row.namespace,
         "category": str(row.category),
-        "execution_type": str(row.execution_type),
         "enabled": row.enabled,
     }
 
@@ -295,9 +270,9 @@ def _record(row: StepType) -> dict[str, Any]:
     return {
         "id": str(row.id),
         "name": row.name,
+        "namespace": row.namespace,
         "display_name": row.display_name,
         "category": str(row.category),
-        "execution_type": str(row.execution_type),
         "image_ref": row.image_ref,
         "version": row.version,
         "enabled": row.enabled,
@@ -377,32 +352,26 @@ def create_app(engine) -> FastAPI:
         spec = descriptor["spec"]
 
         name = metadata["name"]
+        namespace = metadata["namespace"]
         version = metadata.get("version", "1.0.0")
-        execution_type = StepExecutionType(spec["execution"]["type"])
-
-        # A real build injects the freshly built image ref; default container
-        # steps to the shared executor image, and forbid one for in_process.
-        resolved_image = image_ref
-        if execution_type == StepExecutionType.CONTAINER and not resolved_image:
-            resolved_image = DEFAULT_CONTAINER_IMAGE
-        if execution_type == StepExecutionType.IN_PROCESS:
-            resolved_image = None
+        # Where the plugin artifact lives. Distinct from spec.execution.image,
+        # which names the runtime the step executes in.
 
         # Upsert on (name, version): re-publishing the same version updates in
         # place, a new version inserts a new row.
         existing = session.exec(
             select(StepType)
+            .where(StepType.namespace == namespace)
             .where(StepType.name == name)
             .where(StepType.version == version)
         ).one_or_none()
-        row = existing or StepType(name=name, version=version)
+        row = existing or StepType(namespace=namespace, name=name, version=version)
         if existing is None:
             session.add(row)
 
         row.display_name = metadata.get("displayName", name)
         row.category = StepCategory(spec["category"])
-        row.execution_type = execution_type
-        row.image_ref = resolved_image
+        row.image_ref = image_ref
         row.descriptor = descriptor
         row.enabled = True
         row.updated_at = datetime.utcnow()
@@ -418,7 +387,6 @@ def create_app(engine) -> FastAPI:
     @app.get("/api/v1/step-types")
     def list_step_types(
         category: str | None = None,
-        execution_type: str | None = None,
         enabled: bool | None = None,
         view: str | None = Query(
             None, description="Set to 'palette' for React Flow drawer summaries."
@@ -432,10 +400,6 @@ def create_app(engine) -> FastAPI:
         try:
             if category is not None:
                 stmt = stmt.where(StepType.category == StepCategory(category))
-            if execution_type is not None:
-                stmt = stmt.where(
-                    StepType.execution_type == StepExecutionType(execution_type)
-                )
         except ValueError as exc:
             raise HTTPException(400, f"invalid filter value: {exc}")
         if enabled is not None:
@@ -535,11 +499,12 @@ def test_register_http_request_succeeds(client: TestClient) -> None:
     assert response.status_code == 201, response.text
     record = response.json()["data"]
     assert record["name"] == "http_request"
-    assert record["execution_type"] == "container"
     assert record["enabled"] is True
-    # Container step was assigned the default executor image so the DDL CHECK
-    # (container => image_ref present) is satisfied.
-    assert record["image_ref"] == DEFAULT_CONTAINER_IMAGE
+    # Registering a bare manifest supplies no artifact ref, and the runtime
+    # image must not be borrowed to fill it.
+    assert record["image_ref"] is None
+    runtime = record["descriptor"]["spec"]["execution"]["image"]
+    assert runtime == "quay.io/syntara/http-request-executor:latest"
     UUID(record["id"])  # id is a real UUID
 
 
@@ -558,9 +523,9 @@ def test_palette_summary_matches_ui_contract(client: TestClient) -> None:
     summary = summaries[0]
     assert set(summary) == {
         "name",
+        "namespace",
         "displayName",
         "category",
-        "executionType",
         "version",
         "description",
         "icon",
@@ -568,7 +533,6 @@ def test_palette_summary_matches_ui_contract(client: TestClient) -> None:
     assert summary["name"] == "http_request"
     assert summary["displayName"] == "HTTP Request"
     assert summary["category"] == "action"
-    assert summary["executionType"] == "container"
     assert summary["version"] == "1.0.0"
     assert summary["icon"] == "globe"
     # Description is collapsed to a single palette-friendly line.
@@ -587,8 +551,8 @@ def test_list_envelope_matches_documented_contract(client: TestClient) -> None:
     payload = response.json()
     assert payload["meta"] == {"total": 1, "limit": 50, "offset": 0}
     item = payload["data"][0]
-    assert set(item) == {"id", "name", "category", "execution_type", "enabled"}
-    assert item["execution_type"] == "container"
+    assert set(item) == {"id", "name", "namespace", "category", "enabled"}
+    assert item["category"] == "action"
 
     # A non-matching filter yields an empty page, not an error.
     empty = client.get("/api/v1/step-types", params={"category": "trigger"}).json()
@@ -636,20 +600,22 @@ def test_canvas_descriptor_exposes_inputs_and_output_envelope(
     assert "Result" in outputs["properties"]
 
 
-def test_check_constraint_rejects_container_without_image_ref(engine) -> None:
-    """Test 4: a container step with image_ref=None violates the CHECK constraint."""
+def test_unique_constraint_rejects_duplicate_name_version(engine) -> None:
+    """Test 4: (name, version) is unique so versions coexist but duplicates do not."""
     descriptor = compile_manifest()
     with Session(engine) as session:
-        session.add(
-            StepType(
-                name="http_request_bad",
-                display_name="HTTP Request (bad)",
-                category=StepCategory.ACTION,
-                execution_type=StepExecutionType.CONTAINER,
-                image_ref=None,  # violates: container requires image_ref
-                descriptor=descriptor,
+        for _ in range(2):
+            session.add(
+                StepType(
+                    namespace="syntara",
+                    name="http_request",
+                    display_name="HTTP Request",
+                    version="1.0.0",
+                    category=StepCategory.ACTION,
+                    image_ref="quay.io/syntara/http-request-executor:latest",
+                    descriptor=descriptor,
+                )
             )
-        )
         with pytest.raises(IntegrityError):
             session.commit()
 
@@ -694,7 +660,7 @@ def _run_standalone() -> int:
         ("test_list_envelope_matches_documented_contract", lambda: test_list_envelope_matches_documented_contract(fresh_client())),
         ("test_fetch_record_by_id_and_by_name", lambda: test_fetch_record_by_id_and_by_name(fresh_client())),
         ("test_canvas_descriptor_exposes_inputs_and_output_envelope", lambda: test_canvas_descriptor_exposes_inputs_and_output_envelope(fresh_client())),
-        ("test_check_constraint_rejects_container_without_image_ref", lambda: test_check_constraint_rejects_container_without_image_ref(fresh_engine())),
+        ("test_unique_constraint_rejects_duplicate_name_version", lambda: test_unique_constraint_rejects_duplicate_name_version(fresh_engine())),
         ("test_register_same_version_is_idempotent_upsert", lambda: test_register_same_version_is_idempotent_upsert(fresh_client())),
         ("test_get_unknown_step_returns_404", lambda: test_get_unknown_step_returns_404(fresh_client())),
         ("test_register_rejects_invalid_manifest", lambda: test_register_rejects_invalid_manifest(fresh_client())),

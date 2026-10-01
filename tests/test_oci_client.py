@@ -25,7 +25,7 @@ def _artifact(manifest: dict) -> dict:
 
 def test_inspect_reads_annotation_without_fetching_layers(tmp_path: Path) -> None:
     manifest_path = tmp_path / "manifest.yaml"
-    init_step(tmp_path / "step", "step", 3, "localhost:5000/syntara/steps/step:1.0.0")
+    init_step(tmp_path / "step", "step", 3, "localhost:5000/syntara/steps/step:1.0.0", base_dir=tmp_path)
     manifest_path = tmp_path / "step" / "manifest.yaml"
     artifact = _artifact(yaml.safe_load(manifest_path.read_text()))
     requests: list[str] = []
@@ -64,7 +64,7 @@ def test_discover_lists_only_annotated_step_images() -> None:
 
 def test_push_sends_metadata_manifest_to_mock_registry(tmp_path: Path) -> None:
     source = tmp_path / "step"
-    init_step(source, "push_step", 3, "localhost:5000/syntara/steps/push_step:1.0.0")
+    init_step(source, "push_step", 3, "localhost:5000/syntara/steps/push_step:1.0.0", base_dir=tmp_path)
     pushed: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -91,7 +91,7 @@ def test_push_sends_metadata_manifest_to_mock_registry(tmp_path: Path) -> None:
 
 def test_push_registers_with_syntara_after_publishing(tmp_path: Path) -> None:
     source = tmp_path / "step"
-    init_step(source, "joined_step", 3, "localhost:5000/syntara/steps/joined_step:1.0.0")
+    init_step(source, "joined_step", 3, "localhost:5000/syntara/steps/joined_step:1.0.0", base_dir=tmp_path)
     registration_requests: list[tuple[str, dict[str, object]]] = []
 
     def registry_handler(request: httpx.Request) -> httpx.Response:

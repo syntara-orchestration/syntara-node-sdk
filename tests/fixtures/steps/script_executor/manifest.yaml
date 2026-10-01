@@ -3,6 +3,7 @@ kind: StepType
 
 metadata:
   name: script_executor
+  namespace: syntara
   displayName: Python Script Executor
   version: 1.0.0
   icon: terminal
@@ -16,9 +17,8 @@ metadata:
 spec:
   category: task
   execution:
-    type: container
     image: quay.io/syntara/script-python-executor:latest
-    entrypoint: python /workspace/main.py
+    entrypoint: main:ScriptExecutorStep
 
   declaredRequirements:
     capabilities:
@@ -48,7 +48,7 @@ spec:
         type: object
         # Environment maps can carry tokens and passwords; treat the value map
         # as sensitive unless a step-specific contract narrows it further.
-        secret: true
+        redact: true
         patternProperties:
           "^[a-zA-Z_][a-zA-Z0-9_]*$":
             type: string
@@ -71,4 +71,4 @@ spec:
       memory: 256Mi
   executionTimeout: 300
   credentialSpecification:
-    workloadClassification: action
+    credential_requirements: []

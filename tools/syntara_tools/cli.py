@@ -19,22 +19,27 @@ from syntara_tools.oci_client import OCI_ARTIFACT_TYPE, OCI_MANIFEST_ANNOTATION,
 SHARED_SCRIPT_IMAGE = "quay.io/syntara/script-python-executor:latest"
 SHARED_HTTP_IMAGE = "quay.io/syntara/http-request-executor:latest"
 _STEP_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+DEFAULT_NAMESPACE = "syntara"
 
 
-def _manifest(name: str, tier: int, image: str) -> dict[str, Any]:
-    execution: dict[str, Any] = {"type": "container", "image": image}
+def _manifest(name: str, tier: int, image: str, namespace: str = DEFAULT_NAMESPACE) -> dict[str, Any]:
+    # Every image-backed step declares a handle, single-step plugin or not, so
+    # the runtime loads it the same way in all cases.
+    step_class = _step_class_name(name)
+    execution: dict[str, Any] = {"image": image, "entrypoint": f"main:{step_class}"}
     if tier == 1:
-        execution = {"type": "in_process", "image": None, "entrypoint": None}
+        execution = {"image": None, "entrypoint": None}
     return {
         "apiVersion": "syntara.io/v1alpha1",
         "kind": "StepType",
         "metadata": {
             "name": name,
+            "namespace": namespace,
             "displayName": name.replace("_", " ").title(),
             "version": "0.1.0",
             "icon": "terminal",
             "description": f"Custom tier {tier} step.",
-            "tags": [f"execution:{execution['type']}", "category:task"],
+            "tags": ["category:task"],
             "author": "",
             "license": "Apache-2.0",
         },
@@ -54,40 +59,108 @@ def _manifest(name: str, tier: int, image: str) -> dict[str, Any]:
     }
 
 
-def init_step(path: Path, name: str, tier: int, image: str | None) -> None:
+def _step_class_name(name: str) -> str:
+    """Derive the BaseStep subclass name the entrypoint will reference."""
+
+    return "".join(part.title() for part in name.split("_")) + "Step"
+
+
+def _step_module(class_name: str) -> str:
+    """Scaffold a BaseStep subclass matching the declared entrypoint."""
+
+    return f'''"""Step implementation. Loaded by the runtime via spec.execution.entrypoint."""
+
+from pydantic import BaseModel
+
+from syntara_sdk import ExecutionContext, TaskStep
+
+
+class {class_name}Input(BaseModel):
+    """Typed inputs. Keep in sync with spec.inputs in manifest.yaml."""
+
+
+class {class_name}Output(BaseModel):
+    """Inner Result payload; the base class wraps it in StandardOutputWrapper."""
+
+
+class {class_name}(TaskStep[{class_name}Input, {class_name}Output]):
+    def __init__(self) -> None:
+        super().__init__({class_name}Input, {class_name}Output)
+
+    def run(
+        self, inputs: {class_name}Input, context: ExecutionContext
+    ) -> {class_name}Output:
+        raise NotImplementedError("implement the step logic")
+'''
+
+
+def _resolve_within(candidate: Path, base: Path) -> Path:
+    """Resolve ``candidate`` and refuse to escape ``base``.
+
+    Scaffolding paths may arrive from a CLI argument, which in an agentic
+    workflow can be model-generated rather than typed by a person. A value
+    like ``../../etc`` would otherwise write files outside the project, so the
+    resolved target must stay inside the base directory.
+    """
+
+    base = base.resolve()
+    target = (base / candidate).resolve()
+    if target != base and base not in target.parents:
+        raise ValueError(f"path escapes the base directory {base}: {candidate}")
+    return target
+
+
+def init_step(
+    path: Path,
+    name: str,
+    tier: int,
+    image: str | None,
+    namespace: str = DEFAULT_NAMESPACE,
+    base_dir: Path | None = None,
+) -> None:
     """Create a Tier 2 script package or Tier 3 image package."""
 
     if not _STEP_NAME.fullmatch(name):
         raise ValueError("name must be lowercase snake_case")
+    if not _STEP_NAME.fullmatch(namespace):
+        raise ValueError("namespace must be lowercase snake_case")
     if tier not in {2, 3}:
         raise ValueError("--tier must be 2 or 3")
+    path = _resolve_within(path, base_dir if base_dir is not None else Path.cwd())
     if path.exists() and any(path.iterdir()):
         raise FileExistsError(f"target directory is not empty: {path}")
     path.mkdir(parents=True, exist_ok=True)
 
     resolved_image = image or f"quay.io/example/{name}:0.1.0"
-    manifest = _manifest(name, tier, resolved_image)
+    manifest = _manifest(name, tier, resolved_image, namespace)
     (path / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
 
-    if tier == 2:
-        (path / "main.py").write_text(
-            """from typing import Any\n\n\ndef main(inputs: dict[str, Any]) -> dict[str, Any]:\n    return {\"result\": inputs}\n\n\nif __name__ == \"__main__\":\n    print(main({}))\n"""
-        )
-    else:
+    # Every step is built the same way: a BaseStep subclass whose name matches
+    # spec.execution.entrypoint, so the runtime loads it identically whether
+    # the plugin ships one step or many.
+    (path / "main.py").write_text(_step_module(_step_class_name(name)))
+    if tier == 3:
+        entrypoint = manifest["spec"]["execution"]["entrypoint"]
         (path / "Containerfile").write_text(
-            """FROM python:3.12-slim\nCOPY main.py /app/main.py\nENTRYPOINT [\"python\", \"/app/main.py\"]\n"""
+            "FROM docker.io/library/python:3.12-slim\n"
+            "RUN pip install --no-cache-dir syntara-sdk\n"
+            "COPY main.py /app/main.py\n"
+            "WORKDIR /app\n"
+            "USER 1000:1000\n"
+            # Launch through the SDK runner so the step is invoked via its
+            # BaseStep subclass. A bare `python main.py` would bypass input
+            # validation and the redact echo check.
+            f'CMD ["python", "-m", "syntara_sdk.runner", "--entrypoint", "{entrypoint}"]\n'
         )
-        (path / "main.py").write_text(
-            """import json\nimport sys\n\n\nif __name__ == \"__main__\":\n    payload = json.load(sys.stdin) if not sys.stdin.isatty() else {}\n    print(json.dumps({\"result\": payload}))\n"""
-        )
 
 
-def _oci_manifest(manifest: dict[str, Any], image_ref: str | None = None) -> dict[str, Any]:
-    """Return an OCI image manifest carrying the step YAML as an annotation."""
+def _oci_manifest(manifest: dict[str, Any], image_ref: str) -> dict[str, Any]:
+    """Return an OCI artifact manifest carrying the step YAML as an annotation."""
 
-    image = image_ref or manifest["spec"]["execution"]["image"]
-    if not isinstance(image, str) or image in {SHARED_SCRIPT_IMAGE, SHARED_HTTP_IMAGE}:
-        raise ValueError("build packages Tier 3 steps and requires a dedicated image")
+    # The artifact ref is where the plugin is published. It is unrelated to
+    # spec.execution.image, which names the runtime the step executes in.
+    if not isinstance(image_ref, str) or not image_ref:
+        raise ValueError("publishing requires an artifact reference (--registry/--image)")
     raw_yaml = yaml.safe_dump(manifest, sort_keys=False)
     empty_config = b"{}"
     digest = "sha256:" + hashlib.sha256(empty_config).hexdigest()
@@ -105,17 +178,15 @@ def _oci_manifest(manifest: dict[str, Any], image_ref: str | None = None) -> dic
             OCI_MANIFEST_ANNOTATION: raw_yaml,
             "org.opencontainers.image.title": manifest["metadata"]["name"],
             "org.opencontainers.image.version": manifest["metadata"]["version"],
-            "org.opencontainers.image.ref.name": image,
+            "org.opencontainers.image.ref.name": image_ref,
         },
     }
 
 
-def build_step(manifest_path: Path, output: Path, image_ref: str | None = None) -> Path:
-    """Validate a Tier 3 manifest and write an OCI layout or manifest JSON."""
+def build_step(manifest_path: Path, output: Path, image_ref: str) -> Path:
+    """Validate a manifest and write the plugin artifact manifest JSON or layout."""
 
     manifest = compile_manifest(manifest_path)
-    if manifest["spec"]["execution"]["type"] != "container":
-        raise ValueError("build requires a container-backed Tier 3 manifest")
     oci_manifest = _oci_manifest(manifest, image_ref)
     encoded = json.dumps(oci_manifest, indent=2, sort_keys=True).encode()
 
@@ -200,18 +271,11 @@ def push_step(
     register_api_url: str | None = None,
     registration_client: httpx.Client | None = None,
 ) -> str:
-    """Push a Tier 3 manifest and optionally register it with Syntara."""
+    """Publish the plugin artifact and optionally register it with Syntara."""
 
     manifest = compile_manifest(manifest_path)
-    if manifest["spec"]["execution"]["type"] != "container":
-        raise ValueError("push requires a container-backed Tier 3 manifest")
-    manifest = {
-        **manifest,
-        "spec": {
-            **manifest["spec"],
-            "execution": {**manifest["spec"]["execution"], "image": image_ref},
-        },
-    }
+    # spec.execution.image is deliberately left untouched: it names the runtime
+    # environment, not where this plugin artifact is published.
     oci_manifest = _oci_manifest(manifest, image_ref)
     owns_client = registry_client is None
     client = registry_client or OCIRegistryClient()
@@ -234,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     init_parser.add_argument("--tier", type=int, choices=[2, 3], required=True)
     init_parser.add_argument("--path", type=Path, default=None)
     init_parser.add_argument("--image")
+    init_parser.add_argument("--namespace", default=DEFAULT_NAMESPACE)
 
     build_parser = subparsers.add_parser("build", help="package a Tier 3 step as an OCI artifact")
     build_parser.add_argument("manifest", type=Path)
@@ -261,10 +326,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
-            init_step(args.path or Path(args.name), args.name, args.tier, args.image)
+            init_step(
+                args.path or Path(args.name),
+                args.name,
+                args.tier,
+                args.image,
+                args.namespace,
+            )
             return 0
         if args.command == "build":
-            result = build_step(args.manifest, args.output, args.image)
+            output = _resolve_within(args.output, Path.cwd())
+            result = build_step(args.manifest, output, args.image)
             print(result)
         else:
             digest = push_step(

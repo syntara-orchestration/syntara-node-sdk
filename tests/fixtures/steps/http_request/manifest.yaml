@@ -7,6 +7,7 @@ kind: StepType
 
 metadata:
   name: http_request
+  namespace: syntara
   displayName: HTTP Request
   version: 1.0.0
   icon: globe  # React Flow palette glyph; see StepPaletteIcon in common-definitions.json
@@ -23,8 +24,8 @@ metadata:
 spec:
   category: action  # action | task | workflow | trigger
   execution:
-    type: container  # container | in_process
-    image: registry.syntara.io/steps/http-request:1.0.0
+    image: quay.io/syntara/http-request-executor:latest
+    entrypoint: src.main:HttpRequestStep
 
   # Declared capability and credential requirements
   declaredRequirements:
@@ -32,9 +33,6 @@ spec:
       - network-egress             # Required for external HTTP requests
       - readonly-root-filesystem   # Requires read-only root filesystem semantics
       - tmpfs-mount                # Requires an ephemeral filesystem capability
-    credentialTypes:
-      - API Key
-      - Bearer Token
     platformVersion: ">=3.0.0"
 
   # Developer-declared placement and connectivity requirements
@@ -169,12 +167,17 @@ spec:
       - url
       - method
 
-  # Credential access specification for authenticated API calls.
-  # Zero-trust: the manifest stores only abstract UUID references (credential_id).
-  # Runtime injection is execution-plane-owned.
+  # Credential requirements for authenticated API calls. Zero-trust: the
+  # manifest declares named requirements only -- no credential ID or value.
+  # The workflow author binds a real credential; injection is EP-owned.
   credentialSpecification:
-    workloadClassification: action
-    credential_references: []
+    credential_requirements:
+      - name: api_auth
+        description: Credential for the target API, injected as a request header
+        types: [API Key, Bearer Token]
+        required: false
+        mount_type: header
+        header_name: Authorization
 
   # Output schema - references AND extends StandardOutputWrapper from
   # common-definitions.json. The outer envelope (Result/StatusCode/StatusMessage/

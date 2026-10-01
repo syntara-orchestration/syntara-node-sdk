@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, CheckConstraint, Column, Index, MetaData, String, UniqueConstraint
+from sqlalchemy import JSON, Column, Index, MetaData, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
@@ -20,13 +20,6 @@ class StepCategory(StrEnum):
     TRIGGER = "trigger"
 
 
-class StepExecutionType(StrEnum):
-    """Execution planes supported by the dispatcher."""
-
-    IN_PROCESS = "in_process"
-    CONTAINER = "container"
-
-
 class RegistryBase(SQLModel):
     """Base model with isolated metadata for the registry tables."""
 
@@ -38,22 +31,22 @@ class StepType(RegistryBase, table=True):
 
     __tablename__ = "step_types"
     __table_args__ = (
-        UniqueConstraint("name", "version", name="uq_step_types_name_version"),
-        CheckConstraint(
-            "(execution_type = 'container' AND image_ref IS NOT NULL) OR "
-            "(execution_type = 'in_process' AND image_ref IS NULL)",
-            name="step_types_image_ref_by_execution_type",
+        # namespace + name is the globally unique step identity (R3/AC-2), so two
+        # vendors can each ship an "http_request" without colliding.
+        UniqueConstraint(
+            "namespace", "name", "version", name="uq_step_types_namespace_name_version"
         ),
         Index(
             "ix_step_types_canvas_lookup",
             "enabled",
             "category",
-            "execution_type",
+            "namespace",
             "name",
         ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    namespace: str = Field(index=True, max_length=64)
     name: str = Field(index=True, max_length=64)
     display_name: str = Field(max_length=128)
     version: str = Field(default="1.0.0", max_length=64)
@@ -61,18 +54,6 @@ class StepType(RegistryBase, table=True):
         sa_column=Column(
             SAEnum(
                 StepCategory,
-                native_enum=False,
-                create_constraint=True,
-                values_callable=lambda values: [item.value for item in values],
-            ),
-            nullable=False,
-            index=True,
-        )
-    )
-    execution_type: StepExecutionType = Field(
-        sa_column=Column(
-            SAEnum(
-                StepExecutionType,
                 native_enum=False,
                 create_constraint=True,
                 values_callable=lambda values: [item.value for item in values],
