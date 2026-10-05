@@ -17,14 +17,16 @@ from syntara_tools.compiler import (
 )
 from syntara_tools.oci_client import (
     OCI_ARTIFACT_TYPE,
-    OCI_MANIFEST_ANNOTATION,
+    OCI_CONFIG_MEDIA_TYPE,
+    OCI_PLUGIN_MANIFEST_MEDIA_TYPE,
     OCIRegistryClient,
     OCIRegistryError,
 )
 
 __all__ = [
     "OCI_ARTIFACT_TYPE",
-    "OCI_MANIFEST_ANNOTATION",
+    "OCI_CONFIG_MEDIA_TYPE",
+    "OCI_PLUGIN_MANIFEST_MEDIA_TYPE",
     "OCIRegistryClient",
     "OCIRegistryError",
     "PluginDescriptor",

@@ -8,8 +8,8 @@ from syntara_tools.compiler import load_manifest
 
 from tests.registry.models import RegistryBase
 from tests.registry.service import (
-    OCI_ARTIFACT_TYPE,
-    OCI_MANIFEST_ANNOTATION,
+    LEGACY_OCI_ARTIFACT_TYPE,
+    LEGACY_OCI_MANIFEST_ANNOTATION,
     RegistryService,
     validate_oci_manifest,
 )
@@ -38,7 +38,9 @@ def test_register_manifest_persists_dispatch_columns(session: Session) -> None:
 
     assert row.category == "trigger"
     assert row.image_ref is None
-    assert row.descriptor["spec"]["execution"]["image"] is None
+    assert row.descriptor["spec"]["execution"]["image"].startswith(
+        "quay.io/syntara/platform-trigger@sha256:"
+    )
 
 
 def test_register_manifest_payload_accepts_raw_yaml(session: Session) -> None:
@@ -52,8 +54,8 @@ def test_register_manifest_payload_accepts_raw_yaml(session: Session) -> None:
 def test_oci_registration_reads_standard_artifact_annotation(session: Session) -> None:
     manifest = load_manifest(TESTS_DIR / "fixtures" / "steps" / "script_executor" / "manifest.yaml")
     oci_manifest = {
-        "artifactType": OCI_ARTIFACT_TYPE,
-        "annotations": {OCI_MANIFEST_ANNOTATION: yaml.safe_dump(manifest)},
+        "artifactType": LEGACY_OCI_ARTIFACT_TYPE,
+        "annotations": {LEGACY_OCI_MANIFEST_ANNOTATION: yaml.safe_dump(manifest)},
     }
 
     row = RegistryService(session).register_oci_manifest(

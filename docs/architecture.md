@@ -38,8 +38,7 @@ graph TB
 A plugin may contain steps of different categories — a trigger and a task together, for
 example.
 
-The plugin is the versioned ownership unit. This SDK contract defines its in-tree source layout
-and discovery behavior; the packaged representation is outside this document's scope. A plugin
+The plugin is the versioned ownership and distribution unit. A plugin
 contains one or more explicitly listed step manifests. A step's canonical identity is
 `<plugin-namespace>/<plugin-name>/<step-name>`; consequently, moving a step between plugins
 changes its identity. Step names are unique only within a plugin, so different plugins may use
@@ -152,8 +151,16 @@ my-plugin/
 └── tests/
 ```
 
-This is a source-tree convention only. It does not define which files or resolved descriptors a
-future packaged plugin contains.
+The source tree may also contain the build context for a workload image, but the plugin metadata
+OCI artifact does not contain those implementation files. Packaging extracts the root manifest,
+targeted step manifests, compiled descriptors, and other declarative metadata into the metadata
+artifact; `spec.execution.image` points to the separately built workload OCI image that contains
+the executable code and step-side gRPC server/runtime.
+
+The root manifest also owns an explicit, non-empty `spec.images` inventory. Each
+`spec.execution.image` in a targeted step must use one of those exact
+`repository@sha256:<digest>` entries; stale inventory entries are rejected. This makes the
+runtime image set auditable and immutable at plugin build time.
 
 `plugin.yaml` is a Draft-07 validated root contract. Its non-empty, unique `spec.targets` list
 is authoritative: each target is a local relative YAML path resolved from `plugin.yaml`; no URL,
@@ -178,6 +185,9 @@ spec:
   targets:
     - ./steps/create_workspace/manifest.yaml
     - ./steps/list_workspaces/manifest.yaml
+  images:
+    - repository: quay.io/syntara/terraform-enterprise
+      digest: sha256:5555555555555555555555555555555555555555555555555555555555555555
 ```
 
 **Example:**
@@ -203,7 +213,7 @@ metadata:
 spec:
   category: action
   execution:
-    image: quay.io/syntara/http-request-executor:latest
+    image: quay.io/syntara/http-request-executor@sha256:1111111111111111111111111111111111111111111111111111111111111111
     entrypoint: src.main:HttpRequestStep
 
   declaredRequirements:
@@ -301,30 +311,51 @@ reach a remote registry during editing.
 > **The packaging format is not decided** (Q6, out of scope here). The
 > requirements below hold; the OCI specifics after them are provisional.
 
-A plugin is built, versioned, published, and stored as a single artifact containing the compiled
-manifests of every step it wraps. Every plugin uses the same structure with a
-**root-level plugin manifest**, so the platform can locate and index step metadata from an
-uploaded artifact without knowing the plugin's internal layout.
+A plugin's metadata is built, versioned, published, and stored as a lightweight OCI artifact
+containing the compiled manifests of every step it wraps. It contains declarative material only:
+`plugin.yaml`, step manifests, compiled descriptors and schemas, display metadata, and
+policy/capability declarations. It contains no executable step code. Every plugin metadata
+artifact uses the same **root-level plugin manifest**, so the platform can locate and index step
+metadata without knowing the plugin's internal layout.
 
-Whatever format is chosen must:
+Each externally packaged executable step is supplied separately as a workload OCI image. That
+image contains the implementation, dependencies, and a step-side gRPC server/runtime. The
+metadata artifact references workload images through `spec.execution.image`; it does not embed or
+serve their code.
+
+The SDK compiles every discovered step into indexed data containing its canonical identity,
+validated manifest, and a deterministic `contentDigest`. The digest is a SHA-256 hash of the
+canonical compiled data, not a field written into either author manifest. Whatever transport
+format is chosen must:
 
 - carry a root-level plugin manifest that identifies the plugin and points at each step's metadata;
-- keep step metadata coupled to the packaged implementation, so a descriptor cannot drift from
-  the code it describes;
+- keep step metadata coupled to immutable workload-image references, so a descriptor cannot drift
+  from the code it describes;
 - allow the platform to read metadata and hydrate its index **without downloading the full
   artifact**, meeting the `<500 ms` canvas discovery and render target with no remote call while
   an editor is open;
 - support semantic versioning per AC-5, with a defined update path; and
 - avoid a proprietary registry dependency.
 
-### OCI as the Leading Candidate (Provisional)
+### OCI Distribution
 
-The current proposal is an OCI container image artifact carrying each manifest descriptor as a
-referral layer annotation with media type `application/vnd.syntara.step.manifest.v1+yaml`.
-Registration issues an OCI Distribution API manifest or digest query against `image_ref`, reads
-the annotation, and hydrates the index in `<10 ms` without pulling layers. Re-registering a new
-tag or digest is the descriptor-update path, which is what prevents metadata drift. This works
-against vanilla OCI registries (Kubernetes, EKS, AKS, Quay).
+The CLI emits one metadata OCI artifact for each plugin reference. Its metadata carries the root
+plugin manifest and the complete compiled descriptor set, allowing registration to hydrate every
+step from one immutable plugin release without downloading executable code. The plugin manifest
+is stored in a dedicated OCI layer; annotations contain only compact summary fields such as the
+plugin name, version, step count, and categories. The artifact uses
+`application/vnd.unknown.config.v1+json` for its empty config so it is accepted by hosted
+registries.
+
+Registry discovery is index-driven: the client receives known plugin references and never relies
+on registry-wide `_catalog` enumeration. For private registries it probes `/v2/` anonymously,
+follows a same-origin Bearer challenge, and uses configured credentials at that token endpoint.
+An HTTPS delegated token endpoint must be explicitly allowlisted with
+`SYNTARA_OCI_TRUSTED_AUTH_HOSTS` (a comma-separated list of HTTPS origins); credentials never
+follow a plaintext or arbitrary realm from a challenge.
+Transient `429` and `5xx` responses are retried with bounded backoff. The transport's media-type
+and annotation constants are intentionally isolated in the OCI client so the compiler and
+descriptor contract remain stable as the OCI layout evolves.
 
 Its appeal is precisely the drift property: the manifest travels inside the artifact rather than
 being versioned separately alongside it. Any alternative format should be judged on whether it
@@ -339,16 +370,19 @@ graph LR
     INIT["syntara-sdk init<br/>(scaffold plugin)"]
     AUTHOR["Author plugin manifest<br/>+ step manifest.yaml"]
     VALIDATE["syntara-sdk validate<br/>Draft-07 vs<br/>common-definitions.json"]
-    BUILD["Build plugin artifact<br/>manifests + implementations"]
-    REFERRAL["Attach metadata<br/>(referral layer -- provisional)"]
+    BUILD["Build metadata artifact<br/>declarative manifests + descriptors"]
+    WORKLOAD["Build workload OCI image(s)<br/>code + deps + step-side gRPC runtime"]
+    REFERRAL["Store plugin metadata<br/>in OCI layer"]
     PUBLISH["Publish/version artifact<br/>platform registration"]
     HANDOFF["Indexed in platform store<br/>available to orchestrator"]
 
     INIT --> AUTHOR
     AUTHOR --> VALIDATE
     VALIDATE -->|Pass| BUILD
+    VALIDATE -->|Pass| WORKLOAD
     VALIDATE -.->|Fail: schema errors| AUTHOR
     BUILD --> REFERRAL --> PUBLISH
+    WORKLOAD --> PUBLISH
     PUBLISH --> HANDOFF
 ```
 
@@ -405,7 +439,7 @@ supplies:
 ```mermaid
 graph TB
     GRAPH["Activity dispatcher"]
-    FORK{"Execution location inferred from manifest (or platform setting)"}
+    FORK{"Placement selected by AO/admin policy"}
 
     subgraph INPROC_BOX["control plane execution"]
         direction TB
@@ -430,8 +464,10 @@ graph TB
     EXEC_DISPATCH --> WORKER_POD --> RESULT
 ```
 
-- **Control-plane placement** — the engine runs the step as a built-in activity or listener
-  inside the orchestrator process. No execution-plane task or worker pod is created.
+- **Control-plane placement (proposed; not implemented)** — an image-plus-entrypoint step would
+  resolve and stage the workload image before loading its class in the orchestrator process. The
+  staging and isolation details remain an implementation gap; see [Gaps](#gaps). No
+  execution-plane task or worker pod would be created.
 - **Execution-plane placement** — the engine resolves the descriptor and registration policy,
   builds the abstract task invocation (see [Credentials and Sensitive Data](#credentials-and-sensitive-data)), and
   hands it to the execution plane.
@@ -442,19 +478,20 @@ administrative policy, without the manifest changing.
 
 ### Runtime Images
 
-At execution the plane starts the runtime image, makes the plugin artifact's code available to
-it, and then needs to know *which* step in that plugin to run. That is
-`spec.execution.entrypoint` (`module.path:ClassName`).
+Every separately distributed step has a required `spec.execution.image`, irrespective of where
+AO/admin policy places it. It is not a generic interpreter image: it contains the step
+implementation, its dependencies, and a step-side gRPC server/runtime. The execution-plane
+path starts that workload and uses its fixed, image-internal registration/configuration; it does
+not require or consume the manifest `entrypoint`.
 
-**Every image-backed step declares a handle**, whether its plugin ships one step or twenty.
-The schema requires `entrypoint` whenever `image` is set, so the runtime loads every step the
-same way and there is no single-step special case to implement or get wrong. A plugin may
-package several steps, and uniform loading is what makes that work without the runtime
-needing to know how many there are.
+`spec.execution.entrypoint` is an optional `module:Class` control-plane loading handle. It is
+not the workload container process entrypoint or a shell command. An image-plus-entrypoint step
+can be placed on either plane by policy. An image-only step is execution-plane-only and relies on
+its fixed gRPC server registration. The manifest does not encode placement.
 
-The handle is a `module:Class` reference, not a shell command, because the step must be invoked
-through its `BaseStep` subclass — that is where input validation and the `redact` echo check
-live, and a subprocess would bypass both.
+Control-plane loading from a workload image is not implemented. The proposed path would resolve,
+unpack, and stage the image before invoking this handle through the SDK base class; it must first
+define code/dependency compatibility, trust and isolation, caching, and lifecycle management.
 
 
 ### Diagram 3 — SDK-to-Execution-Plane Handoff Contract
@@ -466,7 +503,8 @@ graph LR
     end
 
     subgraph CONTRACT["Handoff Contract →"]
-        C1["image_ref"]
+        C1["plugin image_ref<br/>(metadata artifact)"]
+        C5["execution.image<br/>(workload image)"]
         C2["abstract task invocation<br/>script + inputs + resolved credentials + context"]
         C3["selection metadata<br/>requirements + credential classification + resources"]
         C4["registration controls<br/>sandbox + egress + pool selector"]
@@ -483,7 +521,8 @@ graph LR
         R4["ErrorMessage"]
     end
 
-    DESC --> C1 --> BB
+    DESC --> C1
+    DESC --> C5 --> BB
     DESC --> C2 --> BB
     DESC --> C3 --> BB
     DESC --> C4 --> BB
@@ -495,25 +534,30 @@ graph LR
 
 | Field | Carries |
 |---|---|
-| `image_ref` | The registered plugin artifact the descriptor was extracted from. Authoritative for the step's contract. |
-| `execution.image` + `entrypoint` | The runtime image the step executes in, and the `module:Class` handle identifying which step the runner should load. |
+| `image_ref` | The registered plugin metadata-artifact reference from which the declarative descriptor was extracted. It is used for discovery and registration, not execution. |
+| `execution.image` | The workload OCI image containing executable step code, dependencies, and a step-side gRPC server/runtime. |
+| `execution.entrypoint` | Optional `module:Class` handle for future control-plane loading from the workload image; it is not sent to or required by the gRPC path. |
 | Abstract task invocation | Script, `inputs` (including `redact`-flagged values), credentials resolved from the workflow's credential bindings, and `workflow_context`. |
 | Selection metadata | `declaredRequirements`, `resourceRequirements`, `executionTimeout` — enough for the platform to validate and route. |
 | Registration controls | Administrator-owned `sandbox_required`, `egress_policy`, `worker_pool_selector`. |
 
 ### Control-Plane Handoff
 
-Control-plane-placed steps use the same descriptor, schema metadata, and abstract invocation,
-minus `image_ref` resolution and the transport hop. The control plane registers the activity or
-listener and executes it inline. Two categories vary the return side:
+Control-plane placement is proposed but not implemented. It would use the same descriptor,
+schema metadata, and abstract invocation, resolve and stage the workload image, and, where an
+`entrypoint` is present, load the referenced class inline. The image staging, trust, and
+lifecycle design remains open. An image-only workload has no control-plane loading handle and
+is dispatched through its step-side gRPC server. Two categories vary the return side:
 
 | Step kind | Control plane performs | Returns |
 |---|---|---|
-| `workflow` primitives (`condition`, `loop`, `switch`) | Inline in-memory evaluation | `StandardOutputWrapper` |
-| `subworkflow_call` | Eligibility and execute-permission re-validation, parent pause, inline child invocation, terminal-output collection | `StandardOutputWrapper` with child terminal outputs in `Result` |
-| `trigger` (webhook, schedule, Kafka, `subworkflow_trigger`) | Listener binding from the descriptor, filter evaluation, workflow instantiation | Trigger activity log entry and initial workflow context |
+| Built-in `workflow` primitives (`condition`, `loop`, `switch`) | Inline in-memory evaluation | `StandardOutputWrapper` |
+| Image-plus-entrypoint separately distributed workflow step | Proposed image staging and inline class loading | `StandardOutputWrapper` |
+| Built-in trigger integrations (webhook, schedule, Kafka) | Listener binding, filter evaluation, workflow instantiation | Trigger activity log entry and initial workflow context |
 
-> The trigger row conflicts with R4's "every step". See [Gaps](#gaps).
+The `subworkflow_call` and `subworkflow_trigger` fixtures are image-plus-entrypoint examples.
+They are therefore eligible for the proposed control-plane loading path while remaining
+dispatchable to the execution plane under administrative policy.
 
 ### Transport
 
@@ -522,6 +566,12 @@ SDK owns the invocation and result semantics and the compatibility constraints a
 satisfy — message framing, neutrality to cold-start versus warm-pool lifecycle, and bidirectional
 error and timeout signaling. The execution plane owns the adapter implementation, SIGTERM
 handling, warm-pool provisioning, and completion signaling.
+
+The SDK does not ship a gRPC server, protobuf schema, or transport adapter. Its current boundary
+contract is the canonical `BaseStep.execute_raw` request/response envelope: an input mapping plus
+an `ExecutionContext` produces a `StandardOutputWrapper`. Image-only manifests therefore prove
+routing semantics without requiring an `entrypoint`; a future gRPC adapter must preserve that
+envelope.
 
 > Transport is undecided (SDP Q1); any `stdin` reference left in code is prototype residue.
 
@@ -684,7 +734,7 @@ is the natural hook for the Temporal durable-execution question (SDP Q8).
   "spec": {
     "category": "action",
     "execution": {
-      "image": "quay.io/syntara/http-request-executor:latest"
+      "image": "quay.io/syntara/http-request-executor@sha256:1111111111111111111111111111111111111111111111111111111111111111"
     },
     "inputs": {"...": "typed properties"},
     "outputs": {"$ref": "common-definitions.json#/definitions/StandardOutputWrapper"}
@@ -709,14 +759,14 @@ contract.
 | Example | Category | Runtime image | Location |
 |---|---|---|---|
 | `http_request` | action | dedicated image | [tests/fixtures/steps/http_request/](../tests/fixtures/steps/http_request/) |
-| `script_executor` | task | generic runner + `entrypoint` | [tests/fixtures/steps/script_executor/](../tests/fixtures/steps/script_executor/) |
-| `subworkflow_call` | workflow | null (platform-owned) | [tests/fixtures/steps/subworkflow_call/](../tests/fixtures/steps/subworkflow_call/) |
-| `subworkflow_trigger` | trigger | null (platform-owned) | [tests/fixtures/steps/subworkflow_trigger/](../tests/fixtures/steps/subworkflow_trigger/) |
+| `script_executor` | task | workload image + optional `entrypoint` | [tests/fixtures/steps/script_executor/](../tests/fixtures/steps/script_executor/) |
+| `subworkflow_call` | workflow | workload image + `entrypoint` | [tests/fixtures/steps/subworkflow_call/](../tests/fixtures/steps/subworkflow_call/) |
+| `subworkflow_trigger` | trigger | workload image + `entrypoint` | [tests/fixtures/steps/subworkflow_trigger/](../tests/fixtures/steps/subworkflow_trigger/) |
 
 Each carries a complete `manifest.yaml`, the descriptor fields used for registration and canvas
-metadata, and a README describing its contract and execution boundary. Where an example has
-executable code, its test suite demonstrates validation and registration. Platform-owned steps
-may ship a descriptor and contract reference with no local runner.
+metadata. Where an example has executable code, its test suite demonstrates validation and
+registration. The workload image is the implementation boundary; the metadata fixture does not
+embed executable code.
 
 ## Gaps
 
@@ -728,34 +778,16 @@ are not mirrored here.
   step manifest. The workflow contract must decide whether it stores an opaque installed-step ID
   or a structured plugin reference plus local step name. It must also decide whether plugin
   version, immutable artifact identity, or both are pinned.
-- **Control-plane code loading and isolation.** Nothing defines how a control-plane-placed
-  step's code enters the orchestrator process, what sandboxing applies, or whether it is
-  restricted to first-party or pre-vetted code. Arbitrary author-supplied code in the control
-  plane is an open security question, sharper now that authors cannot influence placement.
-
-  *Candidate answer — dual-mode consumption.* Package every plugin the same way, and let the
-  artifact be consumed two ways off one contract. In execution-plane mode the container's `CMD`
-  launches the SDK runner, which imports `spec.execution.entrypoint` and calls the step through
-  its `BaseStep` subclass. In control-plane mode the orchestrator extracts the source from a
-  well-known path in the artifact and imports the same handle directly. Same code, same
-  entrypoint, same validation path; only the caller differs.
-
-  Two things recommend it. It matches the SDP, which already says every category — `workflow`
-  and `trigger` included — is wrapped in a plugin and published as an artifact. And it removes a
-  placement tell we reintroduced by accident: `execution.type` was deleted so manifests could
-  not declare placement, but `image: null` now correlates 1:1 with control-plane execution
-  across all four reference steps. Under dual-mode every step has an artifact and a handle, the
-  runtime image is optional, and placement stays the dispatcher's call (Q10).
-
-  It would also make `entrypoint` required unconditionally rather than only when `image` is set,
-  since the handle becomes the uniform element and the image the variable one.
-
-  It does not resolve the security question above — it presupposes an answer. Adopt only once
-  arbitrary author code in the control plane is settled.
-- **Multiple runtime images per step type.** `spec.execution.image` is a single string with no
-  override mechanism, so a step cannot offer per-platform variants and an administrator cannot
-  substitute a hardened base runner. Whether the runtime image belongs in the manifest at all,
-  or is bound at registration or workflow build time, is undecided.
+- **Control-plane workload-image loading and isolation (not implemented).** An image-plus-
+  entrypoint step may be selected for control-plane placement by AO/admin policy, but there is no
+  implementation for that path yet. It must define workload-image resolution, unpacking and
+  staging, code and dependency compatibility, trust and isolation boundaries, caching, and
+  lifecycle management before the control plane invokes the `module:Class` handle. The plugin
+  metadata artifact remains declarative and is not a source of executable code.
+- **Multiple workload images per step type.** `spec.execution.image` is currently a single
+  digest-pinned string. The manifest does not define a variant or administrator substitution
+  mechanism; if policy needs a hardened replacement, that resolution contract must be defined
+  without changing the step's metadata artifact.
 - **Trigger prototype does not fit R4.** R4 requires *every* step to expose `StandardOutputWrapper`, but a
   trigger instantiates a workflow rather than returning a result to a downstream step, so the
   requirement does not hold for one of the four categories. Needs either a carve-out in R4 or a

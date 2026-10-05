@@ -1,6 +1,8 @@
 # Step Registry API Tests
 
 These tests verify a **legacy platform registry prototype** (`/api/v1/step-types`). It is test
+coverage for the retired single-step annotation artifact contract, not the SDK's current plugin
+metadata-package contract. New SDK publishing registers plugin artifacts through `/api/v1/plugins`.
 support only, not an SDK persistence contract.
 
 ## What They Test

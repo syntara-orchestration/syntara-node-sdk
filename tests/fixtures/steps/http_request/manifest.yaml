@@ -22,7 +22,7 @@ metadata:
 spec:
   category: action  # action | task | workflow | trigger
   execution:
-    image: quay.io/syntara/http-request-executor:latest
+    image: quay.io/syntara/http-request-executor@sha256:1111111111111111111111111111111111111111111111111111111111111111
     entrypoint: src.main:HttpRequestStep
 
   # Declared capability and credential requirements

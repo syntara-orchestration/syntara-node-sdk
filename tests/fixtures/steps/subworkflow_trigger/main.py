@@ -15,6 +15,29 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel
+from syntara_sdk import ExecutionContext, TriggerStep
+
+
+class SubworkflowTriggerInput(BaseModel):
+    input_variables: dict[str, Any]
+
+
+class SubworkflowTriggerOutput(BaseModel):
+    input_variables: dict[str, Any]
+
+
+class SubworkflowTriggerStep(TriggerStep[SubworkflowTriggerInput, SubworkflowTriggerOutput]):
+    """Control-plane-loadable implementation for the child workflow trigger."""
+
+    def __init__(self) -> None:
+        super().__init__(SubworkflowTriggerInput, SubworkflowTriggerOutput)
+
+    def run(
+        self, inputs: SubworkflowTriggerInput, context: ExecutionContext
+    ) -> SubworkflowTriggerOutput:
+        return SubworkflowTriggerOutput(input_variables=inputs.input_variables)
+
 
 def validate_child_entry(inputs: dict[str, Any]) -> dict[str, Any]:
     """Return a standard result for a child workflow entry payload."""

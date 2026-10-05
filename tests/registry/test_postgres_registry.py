@@ -507,7 +507,7 @@ def test_register_http_request_succeeds(client: TestClient) -> None:
     # image must not be borrowed to fill it.
     assert record["image_ref"] is None
     runtime = record["descriptor"]["spec"]["execution"]["image"]
-    assert runtime == "quay.io/syntara/http-request-executor:latest"
+    assert runtime == "quay.io/syntara/http-request-executor@sha256:1111111111111111111111111111111111111111111111111111111111111111"
     UUID(record["id"])  # id is a real UUID
 
 
@@ -615,7 +615,7 @@ def test_unique_constraint_rejects_duplicate_name_version(engine) -> None:
                     display_name="HTTP Request",
                     version="1.0.0",
                     category=StepCategory.ACTION,
-                    image_ref="quay.io/syntara/http-request-executor:latest",
+                    image_ref="quay.io/syntara/plugins/http-request:1.0.0",
                     descriptor=descriptor,
                 )
             )

@@ -52,7 +52,10 @@ def _step(name: str, category: str = "action") -> dict[str, Any]:
         },
         "spec": {
             "category": category,
-            "execution": {"image": None, "entrypoint": None},
+            "execution": {
+                "image": "registry.example/runtime@sha256:" + "a" * 64,
+                "entrypoint": None,
+            },
             "inputs": {"type": "object", "properties": {}, "required": []},
             "outputs": {},
         },
@@ -71,7 +74,10 @@ def _plugin(targets: list[str], namespace: str = "example", name: str = "sample"
             "description": "A test plugin.",
             "authors": [{"name": "Example Organization", "email": "plugins@example.com"}],
         },
-        "spec": {"targets": targets},
+        "spec": {
+            "targets": targets,
+            "images": [{"repository": "registry.example/runtime", "digest": "sha256:" + "a" * 64}],
+        },
     }
 
 
@@ -103,6 +109,46 @@ def test_discovers_ordered_multistep_plugin_and_canonical_identity(tmp_path: Pat
         "example/sample/first",
     ]
     assert canonical_step_identity("example", "sample", "first") == "example/sample/first"
+
+
+def test_step_content_digest_is_stable_for_equivalent_compiled_data(tmp_path: Path) -> None:
+    _write_yaml(tmp_path / "steps" / "first" / "manifest.yaml", _step("first"))
+    plugin_path = _write_plugin(tmp_path, ["steps/first/manifest.yaml"])
+
+    first = discover_plugin(plugin_path).steps[0]
+    # Rewriting with different YAML key ordering has no semantic effect after parsing.
+    _write_yaml(tmp_path / "steps" / "first" / "manifest.yaml", dict(reversed(_step("first").items())))
+    second = discover_plugin(plugin_path).steps[0]
+
+    assert first.content_digest == second.content_digest
+    assert first.indexed_data()["contentDigest"] == first.content_digest
+
+
+def test_plugin_image_inventory_must_exactly_cover_targeted_execution_images(tmp_path: Path) -> None:
+    step = _step("first")
+    digest = "sha256:" + "c" * 64
+    step["spec"]["execution"]["image"] = f"registry.example/runtime@{digest}"
+    step["spec"]["execution"]["entrypoint"] = "main:FirstStep"
+    _write_yaml(tmp_path / "steps" / "first" / "manifest.yaml", step)
+    plugin_path = _write_plugin(tmp_path, ["steps/first/manifest.yaml"])
+    plugin = _plugin(["steps/first/manifest.yaml"])
+    plugin["spec"]["images"] = [{"repository": "registry.example/runtime", "digest": digest}]
+    _write_yaml(plugin_path, plugin)
+
+    assert discover_plugin(plugin_path).steps[0].manifest["metadata"]["name"] == "first"
+
+    plugin["spec"]["images"] = []
+    _write_yaml(plugin_path, plugin)
+    with pytest.raises(PluginDiscoveryError, match="non-empty"):
+        discover_plugin(plugin_path)
+
+    plugin["spec"]["images"] = [
+        {"repository": "registry.example/runtime", "digest": digest},
+        {"repository": "registry.example/unused", "digest": "sha256:" + "d" * 64},
+    ]
+    _write_yaml(plugin_path, plugin)
+    with pytest.raises(PluginDiscoveryError, match="not referenced"):
+        discover_plugin(plugin_path)
 
 
 def test_same_step_name_is_allowed_in_different_plugins(tmp_path: Path) -> None:
@@ -158,6 +204,15 @@ def test_plugin_authors_are_required_and_non_empty() -> None:
     plugin = _plugin(["steps/example/manifest.yaml"])
     del plugin["metadata"]["authors"]
     assert any("authors" in error for error in validate_plugin_manifest(plugin))
+
+
+def test_plugin_image_inventory_is_required_and_nonempty() -> None:
+    plugin = _plugin(["steps/example/manifest.yaml"])
+    del plugin["spec"]["images"]
+    assert any("images" in error for error in validate_plugin_manifest(plugin))
+
+    plugin["spec"]["images"] = []
+    assert any("images" in error for error in validate_plugin_manifest(plugin))
 
 
 @pytest.mark.parametrize(

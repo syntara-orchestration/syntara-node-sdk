@@ -7,8 +7,7 @@ metadata:
 spec:
   category: workflow
   execution:
-    image: null
-    entrypoint: null
+    image: quay.io/syntara/terraform-enterprise@sha256:5555555555555555555555555555555555555555555555555555555555555555
   inputs:
     type: object
     properties: {}

@@ -6,6 +6,7 @@ not choose how a platform persists or indexes those descriptors.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
@@ -25,6 +26,20 @@ class StepDescriptor:
     target: Path
     manifest: dict[str, Any]
     identity: str
+    content_digest: str
+
+    def indexed_data(self) -> dict[str, Any]:
+        """Return the stable data consumers index for this discovered step.
+
+        This deliberately excludes the source target. Moving an unchanged
+        manifest within a plugin must not change the content address exposed
+        to a registry or catalog.
+        """
+        return {
+            "identity": self.identity,
+            "manifest": self.manifest,
+            "contentDigest": self.content_digest,
+        }
 
 
 @dataclass(frozen=True)
@@ -69,7 +84,9 @@ def load_plugin_manifest(plugin_path: str | Path) -> dict[str, Any]:
 def load_common_definitions(schemas_root: Path | None = None) -> dict[str, Any]:
     """Load the SDK's shared Draft-07 schema definitions."""
     if schemas_root is None:
-        schemas_root = Path(__file__).parent.parent.parent / "schemas"
+        source_schemas = Path(__file__).parent.parent.parent / "schemas"
+        packaged_schemas = Path(__file__).parent / "schemas"
+        schemas_root = source_schemas if source_schemas.exists() else packaged_schemas
     schema_path = Path(schemas_root) / "common-definitions.json"
     if not schema_path.exists():
         raise FileNotFoundError(
@@ -133,6 +150,82 @@ def canonical_step_identity(plugin_namespace: str, plugin_name: str, step_name: 
     return f"{plugin_namespace}/{plugin_name}/{step_name}"
 
 
+def _step_content_digest(identity: str, manifest: dict[str, Any]) -> str:
+    """Hash the canonical compiled/indexed representation of one step.
+
+    The digest is derived after YAML parsing and validation, rather than from
+    authored bytes, so comments, key ordering, and YAML formatting cannot
+    affect it. It is intentionally not written back into source manifests.
+    """
+    indexed = {"identity": identity, "manifest": manifest}
+    canonical = json.dumps(indexed, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def validate_plugin_metadata_payload(payload: object, schemas_root: Path | None = None) -> list[str]:
+    """Validate the self-contained plugin metadata carried in an OCI layer.
+
+    The payload is intentionally validated without reading the authoring tree:
+    an OCI consumer has only the embedded root manifest and compiled step
+    descriptors.  Each descriptor must therefore be internally consistent
+    with the root identity and with the deterministic digest used at publish
+    time.
+    """
+
+    if not isinstance(payload, dict):
+        return ["plugin metadata payload must be a mapping"]
+    plugin = payload.get("plugin")
+    steps = payload.get("steps")
+    if not isinstance(plugin, dict):
+        return ["plugin metadata payload.plugin must be a mapping"]
+    if not isinstance(steps, list):
+        return ["plugin metadata payload.steps must be a list"]
+
+    errors = [f"plugin: {error}" for error in validate_plugin_manifest(plugin, schemas_root)]
+    if errors:
+        return errors
+    targets = plugin["spec"]["targets"]
+    if len(steps) != len(targets):
+        errors.append("steps must contain exactly one descriptor for every plugin target")
+
+    metadata = plugin["metadata"]
+    identities: set[str] = set()
+    for index, descriptor in enumerate(steps):
+        prefix = f"steps/{index}"
+        if not isinstance(descriptor, dict):
+            errors.append(f"{prefix}: descriptor must be a mapping")
+            continue
+        manifest = descriptor.get("manifest")
+        identity = descriptor.get("identity")
+        content_digest = descriptor.get("contentDigest")
+        if not isinstance(manifest, dict):
+            errors.append(f"{prefix}/manifest: must be a mapping")
+            continue
+        errors.extend(f"{prefix}/manifest: {error}" for error in validate_manifest(manifest, schemas_root))
+        if not isinstance(identity, str):
+            errors.append(f"{prefix}/identity: must be a string")
+            continue
+        if not isinstance(content_digest, str):
+            errors.append(f"{prefix}/contentDigest: must be a string")
+            continue
+        if identity in identities:
+            errors.append(f"{prefix}/identity: duplicate identity {identity!r}")
+        identities.add(identity)
+        if isinstance(manifest.get("metadata"), dict) and isinstance(manifest["metadata"].get("name"), str):
+            expected_identity = canonical_step_identity(
+                metadata["namespace"], metadata["name"], manifest["metadata"]["name"]
+            )
+            if identity != expected_identity:
+                errors.append(f"{prefix}/identity: does not match plugin and step metadata")
+            if content_digest != _step_content_digest(identity, manifest):
+                errors.append(f"{prefix}/contentDigest: does not match identity and manifest")
+    return errors
+
+
+def _inventory_image(repository: str, digest: str) -> str:
+    return f"{repository}@{digest}"
+
+
 def _target_path(plugin_root: Path, target: str) -> Path:
     parsed = urlparse(target)
     raw_path = Path(target)
@@ -170,6 +263,13 @@ def discover_plugin(plugin_path: str | Path, schemas_root: Path | None = None) -
     metadata = plugin["metadata"]
     steps: list[StepDescriptor] = []
     names: set[str] = set()
+    used_images: set[str] = set()
+    inventory = {
+        _inventory_image(image["repository"], image["digest"])
+        for image in plugin["spec"]["images"]
+    }
+    if len(inventory) != len(plugin["spec"]["images"]):
+        raise PluginDiscoveryError("Plugin image inventory contains duplicate repository and digest entries")
     for target in plugin["spec"]["targets"]:
         assert isinstance(target, str)
         try:
@@ -197,12 +297,26 @@ def discover_plugin(plugin_path: str | Path, schemas_root: Path | None = None) -
         if step_name in names:
             raise PluginDiscoveryError(f"target {target!r}: duplicate step metadata/name {step_name!r}")
         names.add(step_name)
+        image = step["spec"]["execution"]["image"]
+        if image not in inventory:
+            raise PluginDiscoveryError(
+                f"target {target!r}: execution image {image!r} is not in the plugin image inventory"
+            )
+        used_images.add(image)
+        identity = canonical_step_identity(metadata["namespace"], metadata["name"], step_name)
         steps.append(
             StepDescriptor(
                 target=target_path,
                 manifest=step,
-                identity=canonical_step_identity(metadata["namespace"], metadata["name"], step_name),
+                identity=identity,
+                content_digest=_step_content_digest(identity, step),
             )
+        )
+    unused_images = inventory - used_images
+    if unused_images:
+        raise PluginDiscoveryError(
+            "Plugin image inventory contains entries not referenced by targeted steps: "
+            + ", ".join(sorted(unused_images))
         )
     return PluginDescriptor(root=plugin_root, manifest=plugin, steps=tuple(steps))
 

@@ -43,6 +43,23 @@
       "minLength": 1,
       "pattern": "^(?![A-Za-z][A-Za-z0-9+.-]*:)(?![\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+\\.ya?ml$"
     },
+    "PluginImage": {
+      "type": "object",
+      "description": "An immutable workload image used by one or more targeted steps.",
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^@\\s]+$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      },
+      "required": ["repository", "digest"],
+      "additionalProperties": false
+    },
     "PluginManifest": {
       "type": "object",
       "title": "Plugin Manifest",
@@ -59,9 +76,16 @@
               "minItems": 1,
               "uniqueItems": true,
               "items": {"$ref": "#/definitions/PluginTarget"}
+            },
+            "images": {
+              "type": "array",
+              "description": "Explicit non-empty immutable inventory for workload images referenced by targeted steps.",
+              "minItems": 1,
+              "items": {"$ref": "#/definitions/PluginImage"},
+              "uniqueItems": true
             }
           },
-          "required": ["targets"],
+          "required": ["targets", "images"],
           "additionalProperties": false
         }
       },
@@ -171,19 +195,15 @@
             },
             "execution": {
               "type": "object",
-              "description": "Specifications for the runtime environment",
+              "description": "Declarative workload and optional control-plane loading information; placement is selected by platform policy, not this manifest.",
               "properties": {
                 "image": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "description": "Runtime environment the execution plane runs the step in. It holds an interpreter and the SDK, not step code -- the step implementations live in the plugin artifact. Usually a generic runner reused across steps and plugins; a step with unusual dependencies may warrant its own. Null when the step requires no runtime image.",
-                  "pattern": "^(?:[a-zA-Z0-9][a-zA-Z0-9.-]*(?::[0-9]+)?/)?[a-zA-Z0-9][a-zA-Z0-9._/-]*:[a-zA-Z0-9._-]+$",
+                  "type": "string",
+                  "description": "Required immutable workload OCI image containing this step's implementation, dependencies, and step-side gRPC server/runtime. It must be pinned by sha256 digest and names the workload regardless of control-plane or execution-plane placement; policy selects placement.",
+                  "pattern": "^(?:[a-zA-Z0-9][a-zA-Z0-9.-]*(?::[0-9]+)?/)?[a-zA-Z0-9][a-zA-Z0-9._/-]*@sha256:[a-f0-9]{64}$",
                   "examples": [
-                    "quay.io/syntara/python-executor:1.0.0",
-                    "quay.io/syntara/script-python-executor:latest",
-                    "localhost:5000/syntara/runners/node22:1.0.0"
+                    "quay.io/syntara/script-python-executor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "localhost:5000/syntara/runners/node22@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                   ]
                 },
                 "entrypoint": {
@@ -191,7 +211,7 @@
                     "string",
                     "null"
                   ],
-                  "description": "Step handle in 'module.path:ClassName' form, resolving to this step's BaseStep subclass within the plugin artifact. A plugin may package several steps (R8), so the runtime needs this to know which one to load and invoke through the SDK base class. This is not a shell command: running the step as a subprocess would bypass the base-class input validation and redaction checks. Null when the runtime needs no handle.",
+                  "description": "Optional control-plane loading handle in 'module.path:ClassName' form for code resolved from the workload image. It is not the workload container process entrypoint and is not used by the step-side gRPC path. Omit it for image-only execution-plane workloads. This is not a shell command.",
                   "pattern": "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$",
                   "examples": [
                     "main:HttpRequestStep",
@@ -199,30 +219,7 @@
                   ]
                 }
               },
-              "allOf": [
-                {
-                  "if": {
-                    "properties": {
-                      "image": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "image"
-                    ]
-                  },
-                  "then": {
-                    "required": [
-                      "entrypoint"
-                    ],
-                    "properties": {
-                      "entrypoint": {
-                        "type": "string"
-                      }
-                    }
-                  }
-                }
-              ],
+              "required": ["image"],
               "additionalProperties": false
             },
             "declaredRequirements": {
