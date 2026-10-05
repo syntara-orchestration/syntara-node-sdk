@@ -81,8 +81,8 @@ def test_scaffolded_step_defines_the_class_its_entrypoint_names(tmp_path: Path) 
     assert f"class {class_name}(" in source
 
 
-def test_schema_allows_an_image_only_step_side_grpc_workload() -> None:
-    """An image-only workload registers its own fixed step-side gRPC server."""
+def test_schema_allows_a_workload_without_a_control_plane_handle() -> None:
+    """A workload image may omit the optional control-plane loading handle."""
 
     validator = jsonschema.Draft7Validator(
         {**SCHEMA, "$ref": "#/definitions/StepTypeManifest"}
@@ -93,7 +93,7 @@ def test_schema_allows_an_image_only_step_side_grpc_workload() -> None:
     assert list(validator.iter_errors(manifest)) == []
 
 
-def test_image_only_workload_sdk_boundary_contract_without_grpc_runtime() -> None:
+def test_workload_boundary_contract_without_control_plane_handle() -> None:
     """SDK boundary contract pending a real protobuf/gRPC transport implementation.
 
     The SDK has no gRPC service or generated protobuf runtime. This test fixes the
@@ -109,7 +109,7 @@ def test_image_only_workload_sdk_boundary_contract_without_grpc_runtime() -> Non
     class Output(BaseModel):
         message: str
 
-    class ImageOnlyStep(ActionStep[Input, Output]):
+    class WorkloadStep(ActionStep[Input, Output]):
         def __init__(self) -> None:
             super().__init__(Input, Output)
 
@@ -123,14 +123,15 @@ def test_image_only_workload_sdk_boundary_contract_without_grpc_runtime() -> Non
         context_data = request["workflow_context"]
         if not isinstance(context_data, dict):
             raise ValueError("workflow_context must be a mapping")
-        return ImageOnlyStep().execute_raw(
-            request["inputs"], ExecutionContext(step_name=context_data.get("step_name", "unknown"))
+        return WorkloadStep().execute_raw(
+            request["inputs"],
+            ExecutionContext(step_name=context_data.get("step_name", "unknown")),
         ).model_dump()
 
     response = invoke_boundary(
         {
             "inputs": {"message": "accepted by step-side adapter"},
-            "workflow_context": {"step_name": "image-only"},
+            "workflow_context": {"step_name": "workload-boundary"},
         }
     )
 

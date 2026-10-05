@@ -49,9 +49,9 @@ spec:
     # repository/digest entry in the root plugin inventory.
     image: quay.io/example/my-http-step@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
-    # Optional control-plane handle, "module.path:ClassName", resolved from
-    # the workload image. It is not a container command and is unused by the
-    # step-side gRPC path. Omit it for an EP-only workload.
+    # Optional control-plane loading handle, "module.path:ClassName", resolved
+    # from the workload image. It is not a container command, is not used by
+    # the step-side gRPC path, and does not select placement.
     entrypoint: main:ExampleStep
 
   # Developer-declared extension requirements. These describe the capabilities

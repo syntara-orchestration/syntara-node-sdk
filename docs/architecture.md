@@ -274,7 +274,7 @@ graph TB
 
     subgraph SPEC_CONTENTS["spec section"]
         CLASS["category<br/>action | task | workflow | trigger"]
-        EXEC["execution<br/>• image (runtime env)<br/>• entrypoint"]
+        EXEC["execution<br/>• workload image<br/>• optional control-plane handle"]
         INPUTS["inputs<br/>• typed properties<br/>• required / enum / pattern"]
         OUTPUTS["outputs<br/>StandardOutputWrapper"]
         REQS["declaredRequirements<br/>• capabilities<br/>• platformVersion"]
@@ -464,10 +464,11 @@ graph TB
     EXEC_DISPATCH --> WORKER_POD --> RESULT
 ```
 
-- **Control-plane placement (proposed; not implemented)** — an image-plus-entrypoint step would
-  resolve and stage the workload image before loading its class in the orchestrator process. The
-  staging and isolation details remain an implementation gap; see [Gaps](#gaps). No
-  execution-plane task or worker pod would be created.
+- **Control-plane placement (proposed; not implemented)** — when the optional
+  `execution.entrypoint` is present and policy selects direct control-plane execution, the
+  platform would resolve and stage the workload image before loading that class in the
+  orchestrator process. The staging and isolation details remain an implementation gap; see
+  [Gaps](#gaps). No execution-plane task or worker pod would be created.
 - **Execution-plane placement** — the engine resolves the descriptor and registration policy,
   builds the abstract task invocation (see [Credentials and Sensitive Data](#credentials-and-sensitive-data)), and
   hands it to the execution plane.
@@ -485,9 +486,10 @@ path starts that workload and uses its fixed, image-internal registration/config
 not require or consume the manifest `entrypoint`.
 
 `spec.execution.entrypoint` is an optional `module:Class` control-plane loading handle. It is
-not the workload container process entrypoint or a shell command. An image-plus-entrypoint step
-can be placed on either plane by policy. An image-only step is execution-plane-only and relies on
-its fixed gRPC server registration. The manifest does not encode placement.
+not the workload container process entrypoint or a shell command, is not used by the step-side
+gRPC path, and its presence does not select placement. A workload without this handle still uses
+the same gRPC-capable image; it simply does not declare direct control-plane loading. The manifest
+does not encode placement.
 
 Control-plane loading from a workload image is not implemented. The proposed path would resolve,
 unpack, and stage the image before invoking this handle through the SDK base class; it must first
@@ -536,7 +538,7 @@ graph LR
 |---|---|
 | `image_ref` | The registered plugin metadata-artifact reference from which the declarative descriptor was extracted. It is used for discovery and registration, not execution. |
 | `execution.image` | The workload OCI image containing executable step code, dependencies, and a step-side gRPC server/runtime. |
-| `execution.entrypoint` | Optional `module:Class` handle for future control-plane loading from the workload image; it is not sent to or required by the gRPC path. |
+| `execution.entrypoint` | Optional `module:Class` handle for future control-plane loading from the workload image; it is not sent to or required by the gRPC path, and its presence does not select placement. |
 | Abstract task invocation | Script, `inputs` (including `redact`-flagged values), credentials resolved from the workflow's credential bindings, and `workflow_context`. |
 | Selection metadata | `declaredRequirements`, `resourceRequirements`, `executionTimeout` — enough for the platform to validate and route. |
 | Registration controls | Administrator-owned `sandbox_required`, `egress_policy`, `worker_pool_selector`. |
@@ -546,18 +548,19 @@ graph LR
 Control-plane placement is proposed but not implemented. It would use the same descriptor,
 schema metadata, and abstract invocation, resolve and stage the workload image, and, where an
 `entrypoint` is present, load the referenced class inline. The image staging, trust, and
-lifecycle design remains open. An image-only workload has no control-plane loading handle and
-is dispatched through its step-side gRPC server. Two categories vary the return side:
+lifecycle design remains open. A workload without an entrypoint has no direct control-plane
+loading handle and uses the common step-side gRPC path when dispatched to a workload runtime.
+Two categories vary the return side:
 
 | Step kind | Control plane performs | Returns |
 |---|---|---|
 | Built-in `workflow` primitives (`condition`, `loop`, `switch`) | Inline in-memory evaluation | `StandardOutputWrapper` |
-| Image-plus-entrypoint separately distributed workflow step | Proposed image staging and inline class loading | `StandardOutputWrapper` |
+| Separately distributed workflow step with optional control-plane loading handle | Proposed image staging and inline class loading | `StandardOutputWrapper` |
 | Built-in trigger integrations (webhook, schedule, Kafka) | Listener binding, filter evaluation, workflow instantiation | Trigger activity log entry and initial workflow context |
 
-The `subworkflow_call` and `subworkflow_trigger` fixtures are image-plus-entrypoint examples.
-They are therefore eligible for the proposed control-plane loading path while remaining
-dispatchable to the execution plane under administrative policy.
+The `subworkflow_call` and `subworkflow_trigger` fixtures declare workload images and optional
+control-plane loading handles. They are eligible for the proposed control-plane loading path
+while remaining dispatchable to the execution plane under administrative policy.
 
 ### Transport
 
@@ -569,9 +572,9 @@ handling, warm-pool provisioning, and completion signaling.
 
 The SDK does not ship a gRPC server, protobuf schema, or transport adapter. Its current boundary
 contract is the canonical `BaseStep.execute_raw` request/response envelope: an input mapping plus
-an `ExecutionContext` produces a `StandardOutputWrapper`. Image-only manifests therefore prove
-routing semantics without requiring an `entrypoint`; a future gRPC adapter must preserve that
-envelope.
+an `ExecutionContext` produces a `StandardOutputWrapper`. Workloads without a control-plane
+loading handle therefore prove the routing semantics without requiring an `entrypoint`; a future
+gRPC adapter must preserve that envelope.
 
 > Transport is undecided (SDP Q1); any `stdin` reference left in code is prototype residue.
 
@@ -756,12 +759,12 @@ contract.
 
 ## Reference Implementations
 
-| Example | Category | Runtime image | Location |
+| Example | Category | Workload image | Location |
 |---|---|---|---|
 | `http_request` | action | dedicated image | [tests/fixtures/steps/http_request/](../tests/fixtures/steps/http_request/) |
-| `script_executor` | task | workload image + optional `entrypoint` | [tests/fixtures/steps/script_executor/](../tests/fixtures/steps/script_executor/) |
-| `subworkflow_call` | workflow | workload image + `entrypoint` | [tests/fixtures/steps/subworkflow_call/](../tests/fixtures/steps/subworkflow_call/) |
-| `subworkflow_trigger` | trigger | workload image + `entrypoint` | [tests/fixtures/steps/subworkflow_trigger/](../tests/fixtures/steps/subworkflow_trigger/) |
+| `script_executor` | task | workload image; optional control-plane loading handle | [tests/fixtures/steps/script_executor/](../tests/fixtures/steps/script_executor/) |
+| `subworkflow_call` | workflow | workload image; optional control-plane loading handle | [tests/fixtures/steps/subworkflow_call/](../tests/fixtures/steps/subworkflow_call/) |
+| `subworkflow_trigger` | trigger | workload image; optional control-plane loading handle | [tests/fixtures/steps/subworkflow_trigger/](../tests/fixtures/steps/subworkflow_trigger/) |
 
 Each carries a complete `manifest.yaml`, the descriptor fields used for registration and canvas
 metadata. Where an example has executable code, its test suite demonstrates validation and
@@ -778,12 +781,12 @@ are not mirrored here.
   step manifest. The workflow contract must decide whether it stores an opaque installed-step ID
   or a structured plugin reference plus local step name. It must also decide whether plugin
   version, immutable artifact identity, or both are pinned.
-- **Control-plane workload-image loading and isolation (not implemented).** An image-plus-
-  entrypoint step may be selected for control-plane placement by AO/admin policy, but there is no
-  implementation for that path yet. It must define workload-image resolution, unpacking and
-  staging, code and dependency compatibility, trust and isolation boundaries, caching, and
-  lifecycle management before the control plane invokes the `module:Class` handle. The plugin
-  metadata artifact remains declarative and is not a source of executable code.
+- **Control-plane workload-image loading and isolation (not implemented).** A workload declaring
+  `execution.entrypoint` may be selected for direct control-plane placement by AO/admin policy,
+  but there is no implementation for that path yet. It must define workload-image resolution,
+  unpacking and staging, code and dependency compatibility, trust and isolation boundaries,
+  caching, and lifecycle management before the control plane invokes the `module:Class` handle.
+  The plugin metadata artifact remains declarative and is not a source of executable code.
 - **Multiple workload images per step type.** `spec.execution.image` is currently a single
   digest-pinned string. The manifest does not define a variant or administrator substitution
   mechanism; if policy needs a hardened replacement, that resolution contract must be defined

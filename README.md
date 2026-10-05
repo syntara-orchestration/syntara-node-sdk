@@ -213,8 +213,10 @@ Manifests do not declare where a step runs; AO/admin policy selects placement. T
 artifact is declarative metadata only. `spec.execution.image` names the separate workload OCI
 image, which contains the step implementation, dependencies, and step-side gRPC runtime.
 `spec.execution.entrypoint` (`module.path:ClassName`) is an optional control-plane loading handle,
-not the container process entrypoint; it is not required by the gRPC path. Control-plane loading
-from workload images is not implemented yet. See [Dispatch and Handoff](docs/architecture.md#dispatch-and-handoff).
+not the container process entrypoint, and it is not required by the step-side gRPC path. Its
+presence does not select placement: every workload image supports the gRPC path, while an
+entrypoint indicates that direct control-plane loading is supported. Control-plane loading from
+workload images is not implemented yet. See [Dispatch and Handoff](docs/architecture.md#dispatch-and-handoff).
 
 ## Examples
 

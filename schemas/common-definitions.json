@@ -211,7 +211,7 @@
                     "string",
                     "null"
                   ],
-                  "description": "Optional control-plane loading handle in 'module.path:ClassName' form for code resolved from the workload image. It is not the workload container process entrypoint and is not used by the step-side gRPC path. Omit it for image-only execution-plane workloads. This is not a shell command.",
+                  "description": "Optional control-plane loading handle in 'module.path:ClassName' form for code resolved from the workload image. It is not the workload container process entrypoint or a shell command, is not used by the step-side gRPC path, and its presence does not select placement. Omit it when direct control-plane loading is not supported.",
                   "pattern": "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$",
                   "examples": [
                     "main:HttpRequestStep",

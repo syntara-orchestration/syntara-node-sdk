@@ -136,8 +136,9 @@ def init_step(
     path.mkdir(parents=True, exist_ok=True)
     (path / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
 
-    # The generated source exposes a control-plane loading handle. Workload
-    # images may instead be EP-only and use image-internal gRPC registration.
+    # The generated source exposes an optional control-plane loading handle.
+    # Every workload image also carries the step-side gRPC contract; placement
+    # is selected by platform policy.
     (path / "main.py").write_text(_step_module(_step_class_name(name)))
     if tier == 3:
         entrypoint = manifest["spec"]["execution"]["entrypoint"]
