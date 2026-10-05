@@ -30,35 +30,47 @@ pip install -e .
 
 ### Scaffold and Package Steps
 
-Use the CLI to create a shared-runner script step or a dedicated-image step:
+Use the CLI to create step source and declare its workload image. Before a
+plugin can be built, resolve each workload image to an immutable digest and
+add the exact repository/digest to the root plugin inventory:
 
 ```bash
-syntara-sdk init normalize_payload --tier 2  # shared-runner script step
-syntara-sdk init customer_lookup --tier 3 --image quay.io/example/customer-lookup:1.0.0  # dedicated container extension
-syntara-sdk build customer_lookup/manifest.yaml --output customer-lookup-oci
+syntara-sdk init normalize_payload --tier 2
+syntara-sdk init customer_lookup --tier 3 --image quay.io/example/customer-lookup@sha256:<64-hex-digest>
+# Copy plugin.example.yaml to plugin.yaml, point targets at the manifests,
+# and use digest-pinned workload references in both files.
+# For example: quay.io/example/customer-lookup@sha256:<64-hex-digest>
+syntara-sdk build plugin.yaml --registry localhost:5000/syntara/plugins/customer-lookup:1.0.0 --output customer-lookup-oci
 
 # Local prototype: publish to OCI, then register in Syntara automatically
-syntara-sdk push customer_lookup/manifest.yaml \
-  --registry localhost:5000/syntara/steps/customer-lookup:1.0.0
+syntara-sdk push plugin.yaml \
+  --registry localhost:5000/syntara/plugins/customer-lookup:1.0.0
 ```
 
-Dedicated container-extension builds emit a standard OCI image manifest with artifact type
-`application/vnd.syntara.step.manifest.v1+yaml` and the validated YAML manifest
-in the `org.syntara.step.manifest` annotation.
+Builds emit one OCI artifact per plugin. Its metadata contains the validated root
+manifest plus compiled descriptors for every explicitly targeted step, including a
+deterministic `contentDigest` for each descriptor. Runtime images named by targeted
+steps must be listed at the root as immutable `repository`/`sha256` inventory entries.
 
 `push` publishes the OCI metadata and then calls
-`POST /api/v1/step-types` to add the step to Syntara's available-step catalog.
+`POST /api/v1/plugins` to add every step in the plugin release to Syntara's catalog.
 Use `--skip-register` for registry-only publishing or `--api-url` to target a
 different Syntara instance.
 
+For a private registry, set `SYNTARA_OCI_USERNAME` and `SYNTARA_OCI_PASSWORD`.
+The OCI client probes `/v2/` anonymously, follows a registry's same-origin Bearer challenge
+when present, and retries Basic-auth registries with the configured credentials.
+
 ### Create Your First Step
 
-**1. Copy the manifest template:**
+**1. Copy the plugin and step manifest examples:**
 
 ```bash
-# Use the canonical template as a starting point
-cp manifest.yaml steps/my-http-step/manifest.yaml
-cd steps/my-http-step
+# Examples are labeled so they are not mistaken for manifests belonging to this repository.
+cp plugin.example.yaml plugin.yaml
+mkdir -p steps/my_http_step
+cp manifest.example.yaml steps/my_http_step/manifest.yaml
+cd steps/my_http_step
 ```
 
 **2. Edit `manifest.yaml` (K8s CRD structure):**
@@ -69,9 +81,7 @@ kind: StepType
 
 metadata:
   name: my_http_step
-  namespace: syntara
   displayName: My HTTP Step
-  version: 1.0.0
   icon: globe
   description: Custom HTTP request step with retry logic
   tags:
@@ -82,7 +92,7 @@ metadata:
 spec:
   category: action
   execution:
-    image: quay.io/syntara/http-request-executor:latest
+    image: quay.io/syntara/http-request-executor@sha256:1111111111111111111111111111111111111111111111111111111111111111
     entrypoint: src.main:MyHttpStep
 
   declaredRequirements:
@@ -138,7 +148,7 @@ errors = validate_manifest(manifest)
 if errors:
     print("Validation errors:", errors)
 
-# Compile (validates + prepares for database)
+# Compile (validates + prepares a descriptor)
 descriptor = compile_manifest("steps/my-http-step/manifest.yaml")
 print(f"✓ Compiled: {descriptor['metadata']['name']}")
 ```
@@ -160,15 +170,15 @@ the registration API. The CLI publishes the OCI manifest and then registers the
 image with Syntara automatically:
 
 ```bash
-syntara-sdk push tests/fixtures/steps/http_request/manifest.yaml \
-  --registry localhost:5000/syntara/steps/http-request:1.0.0 \
+syntara-sdk push plugin.yaml \
+  --registry localhost:5000/syntara/plugins/http-request:1.0.0 \
   --api-url http://localhost:5173
 ```
 
 Use `--skip-register` when publishing to a registry without making the step
 available in Syntara yet. An administrator or deployment process can then
-register the existing image later by posting its `image_ref` to
-`POST /api/v1/step-types`.
+register the existing plugin metadata artifact later by posting its `image_ref` to
+`POST /api/v1/plugins`.
 
 ## Architecture
 
@@ -199,12 +209,14 @@ graph LR
 
 ### Execution Placement
 
-Manifests do not declare where a step runs. The Execution Plane derives placement from the
-step's category, resource requirements, declared capabilities, and administrative registration
-policy. `spec.execution.image` names the runtime the execution plane runs the step *in* -- an
-interpreter plus the SDK, holding no step code. The step implementations live in the plugin
-artifact, and `spec.execution.entrypoint` (`module.path:ClassName`) selects which one to load.
-See [Dispatch and Handoff](docs/architecture.md#dispatch-and-handoff).
+Manifests do not declare where a step runs; AO/admin policy selects placement. The plugin OCI
+artifact is declarative metadata only. `spec.execution.image` names the separate workload OCI
+image, which contains the step implementation, dependencies, and step-side gRPC runtime.
+`spec.execution.entrypoint` (`module.path:ClassName`) is an optional control-plane loading handle,
+not the container process entrypoint, and it is not required by the step-side gRPC path. Its
+presence does not select placement: every workload image supports the gRPC path, while an
+entrypoint indicates that direct control-plane loading is supported. Control-plane loading from
+workload images is not implemented yet. See [Dispatch and Handoff](docs/architecture.md#dispatch-and-handoff).
 
 ## Examples
 
@@ -319,6 +331,10 @@ uv run pytest tests/registry/test_postgres_registry.py
 
 ```
 syntara-step-sdk/
+├── plugin.example.yaml                # Root plugin manifest example
+├── manifest.example.yaml              # Step manifest example
+├── plugin.schema.json                 # Root plugin schema entry point
+├── manifest.schema.json               # Step schema entry point
 ├── schemas/
 │   └── common-definitions.json        # Platform meta-schema
 ├── steps/

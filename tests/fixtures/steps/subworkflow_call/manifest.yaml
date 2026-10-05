@@ -3,22 +3,20 @@ kind: StepType
 
 metadata:
   name: subworkflow_call
-  namespace: syntara
   displayName: Subworkflow Call
-  version: 1.0.0
   icon: project-diagram
   description: Parent-side in-process caller for Reference-mode child workflow composition.
   tags:
-    - category:workflow
     - subworkflow:reference-mode
-  author: Syntara Team
+  authors:
+    - name: Syntara Team
   license: Apache-2.0
 
 spec:
   category: workflow
   execution:
-    image: null
-    entrypoint: null
+    image: quay.io/syntara/platform-workflow@sha256:3333333333333333333333333333333333333333333333333333333333333333
+    entrypoint: main:SubworkflowCallStep
 
   inputs:
     type: object

@@ -3,21 +3,19 @@ kind: StepType
 
 metadata:
   name: script_executor
-  namespace: syntara
   displayName: Python Script Executor
-  version: 1.0.0
   icon: terminal
   description: Executes a Python or Bash script in the shared script runner.
   tags:
-    - category:task
     - execution:container
-  author: Syntara Team
+  authors:
+    - name: Syntara Team
   license: Apache-2.0
 
 spec:
   category: task
   execution:
-    image: quay.io/syntara/script-python-executor:latest
+    image: quay.io/syntara/script-python-executor@sha256:2222222222222222222222222222222222222222222222222222222222222222
     entrypoint: main:ScriptExecutorStep
 
   declaredRequirements:

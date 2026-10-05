@@ -41,6 +41,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sdk-python/syntara_sdk", "tools/syntara_tools"]
+force-include = { "schemas/common-definitions.json" = "syntara_tools/schemas/common-definitions.json" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

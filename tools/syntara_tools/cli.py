@@ -13,34 +13,35 @@ from typing import Any
 import httpx
 import yaml
 
-from syntara_tools.compiler import compile_manifest
-from syntara_tools.oci_client import OCI_ARTIFACT_TYPE, OCI_MANIFEST_ANNOTATION, OCIRegistryClient
+from syntara_tools.compiler import (
+    PluginDiscoveryError,
+    discover_plugin,
+    load_manifest,
+    validate_manifest,
+)
+from syntara_tools.oci_client import (
+    OCI_ARTIFACT_TYPE,
+    OCI_CONFIG_MEDIA_TYPE,
+    OCI_PLUGIN_MANIFEST_MEDIA_TYPE,
+    OCIRegistryClient,
+    parse_image_reference,
+)
 
-SHARED_SCRIPT_IMAGE = "quay.io/syntara/script-python-executor:latest"
-SHARED_HTTP_IMAGE = "quay.io/syntara/http-request-executor:latest"
 _STEP_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
-DEFAULT_NAMESPACE = "syntara"
 
 
-def _manifest(name: str, tier: int, image: str, namespace: str = DEFAULT_NAMESPACE) -> dict[str, Any]:
-    # Every image-backed step declares a handle, single-step plugin or not, so
-    # the runtime loads it the same way in all cases.
+def _manifest(name: str, tier: int, image: str) -> dict[str, Any]:
     step_class = _step_class_name(name)
     execution: dict[str, Any] = {"image": image, "entrypoint": f"main:{step_class}"}
-    if tier == 1:
-        execution = {"image": None, "entrypoint": None}
     return {
         "apiVersion": "syntara.io/v1alpha1",
         "kind": "StepType",
         "metadata": {
             "name": name,
-            "namespace": namespace,
             "displayName": name.replace("_", " ").title(),
-            "version": "0.1.0",
             "icon": "terminal",
             "description": f"Custom tier {tier} step.",
-            "tags": ["category:task"],
-            "author": "",
+            "tags": [],
             "license": "Apache-2.0",
         },
         "spec": {
@@ -115,29 +116,29 @@ def init_step(
     name: str,
     tier: int,
     image: str | None,
-    namespace: str = DEFAULT_NAMESPACE,
     base_dir: Path | None = None,
 ) -> None:
     """Create a Tier 2 script package or Tier 3 image package."""
 
     if not _STEP_NAME.fullmatch(name):
         raise ValueError("name must be lowercase snake_case")
-    if not _STEP_NAME.fullmatch(namespace):
-        raise ValueError("namespace must be lowercase snake_case")
     if tier not in {2, 3}:
         raise ValueError("--tier must be 2 or 3")
     path = _resolve_within(path, base_dir if base_dir is not None else Path.cwd())
     if path.exists() and any(path.iterdir()):
         raise FileExistsError(f"target directory is not empty: {path}")
-    path.mkdir(parents=True, exist_ok=True)
 
-    resolved_image = image or f"quay.io/example/{name}:0.1.0"
-    manifest = _manifest(name, tier, resolved_image, namespace)
+    resolved_image = image or f"quay.io/example/{name}@sha256:" + "0" * 64
+    manifest = _manifest(name, tier, resolved_image)
+    errors = validate_manifest(manifest)
+    if errors:
+        raise ValueError("generated manifest is invalid:\n" + "\n".join(errors))
+    path.mkdir(parents=True, exist_ok=True)
     (path / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
 
-    # Every step is built the same way: a BaseStep subclass whose name matches
-    # spec.execution.entrypoint, so the runtime loads it identically whether
-    # the plugin ships one step or many.
+    # The generated source exposes an optional control-plane loading handle.
+    # Every workload image also carries the step-side gRPC contract; placement
+    # is selected by platform policy.
     (path / "main.py").write_text(_step_module(_step_class_name(name)))
     if tier == 3:
         entrypoint = manifest["spec"]["execution"]["entrypoint"]
@@ -147,60 +148,87 @@ def init_step(
             "COPY main.py /app/main.py\n"
             "WORKDIR /app\n"
             "USER 1000:1000\n"
-            # Launch through the SDK runner so the step is invoked via its
-            # BaseStep subclass. A bare `python main.py` would bypass input
-            # validation and the redact echo check.
+            # This is a local development command, not the production
+            # step-side gRPC server command. Workload-image authors replace
+            # it with the language SDK's gRPC server configuration for EP use.
+            # A bare `python main.py` would bypass input validation and the
+            # redact echo check.
             f'CMD ["python", "-m", "syntara_sdk.runner", "--entrypoint", "{entrypoint}"]\n'
         )
 
 
-def _oci_manifest(manifest: dict[str, Any], image_ref: str) -> dict[str, Any]:
-    """Return an OCI artifact manifest carrying the step YAML as an annotation."""
+def _oci_manifest(plugin_path: Path, image_ref: str) -> tuple[dict[str, Any], bytes]:
+    """Return an OCI manifest and its plugin metadata layer contents."""
 
     # The artifact ref is where the plugin is published. It is unrelated to
     # spec.execution.image, which names the runtime the step executes in.
     if not isinstance(image_ref, str) or not image_ref:
-        raise ValueError("publishing requires an artifact reference (--registry/--image)")
-    raw_yaml = yaml.safe_dump(manifest, sort_keys=False)
+        raise ValueError("publishing requires an artifact reference (--registry)")
+    parse_image_reference(image_ref)
+    plugin = discover_plugin(plugin_path)
+    # Keep the metadata payload independent from the OCI layout.  The OCI
+    # client owns transport-specific constants and can change them without
+    # changing compiler output or the distribution boundary.
+    raw_yaml = yaml.safe_dump(
+        {
+            "plugin": plugin.manifest,
+            "steps": [step.indexed_data() for step in plugin.steps],
+        },
+        sort_keys=False,
+    ).encode()
     empty_config = b"{}"
-    digest = "sha256:" + hashlib.sha256(empty_config).hexdigest()
-    return {
+    config_digest = "sha256:" + hashlib.sha256(empty_config).hexdigest()
+    layer_digest = "sha256:" + hashlib.sha256(raw_yaml).hexdigest()
+    manifest = {
         "schemaVersion": 2,
         "mediaType": "application/vnd.oci.image.manifest.v1+json",
         "artifactType": OCI_ARTIFACT_TYPE,
         "config": {
-            "mediaType": "application/vnd.oci.empty.v1+json",
-            "digest": digest,
+            "mediaType": OCI_CONFIG_MEDIA_TYPE,
+            "digest": config_digest,
             "size": len(empty_config),
         },
-        "layers": [],
+        "layers": [
+            {
+                "mediaType": OCI_PLUGIN_MANIFEST_MEDIA_TYPE,
+                "digest": layer_digest,
+                "size": len(raw_yaml),
+                "annotations": {"org.opencontainers.image.title": "plugin.yaml"},
+            }
+        ],
         "annotations": {
-            OCI_MANIFEST_ANNOTATION: raw_yaml,
-            "org.opencontainers.image.title": manifest["metadata"]["name"],
-            "org.opencontainers.image.version": manifest["metadata"]["version"],
+            "org.opencontainers.image.title": plugin.manifest["metadata"]["name"],
             "org.opencontainers.image.ref.name": image_ref,
+            "org.syntara.plugin.version": plugin.manifest["metadata"]["version"],
+            "org.syntara.plugin.step_count": str(len(plugin.steps)),
+            "org.syntara.plugin.categories": ",".join(
+                sorted({step.manifest["spec"]["category"] for step in plugin.steps})
+            ),
         },
     }
+    return manifest, raw_yaml
 
 
-def build_step(manifest_path: Path, output: Path, image_ref: str) -> Path:
-    """Validate a manifest and write the plugin artifact manifest JSON or layout."""
+def build_plugin(plugin_path: Path, output: Path, image_ref: str) -> Path:
+    """Build one root plugin artifact containing all explicitly targeted steps."""
 
-    manifest = compile_manifest(manifest_path)
-    oci_manifest = _oci_manifest(manifest, image_ref)
+    oci_manifest, layer_contents = _oci_manifest(plugin_path, image_ref)
     encoded = json.dumps(oci_manifest, indent=2, sort_keys=True).encode()
 
     if output.suffix == ".json":
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(encoded)
-        return output
+        raise ValueError(
+            "build output must be an OCI layout directory; a standalone manifest JSON "
+            "omits the referenced config and layer blobs"
+        )
 
     digest = "sha256:" + hashlib.sha256(encoded).hexdigest()
     config = b"{}"
     config_digest = "sha256:" + hashlib.sha256(config).hexdigest()
+    layer_digest = "sha256:" + hashlib.sha256(layer_contents).hexdigest()
     blob_root = output / "blobs" / "sha256"
     blob_root.mkdir(parents=True, exist_ok=True)
     (blob_root / config_digest.removeprefix("sha256:")).write_bytes(config)
+    (blob_root / layer_digest.removeprefix("sha256:")).write_bytes(layer_contents)
     (blob_root / digest.removeprefix("sha256:")).write_bytes(encoded)
     (output / "oci-layout").write_text(json.dumps({"imageLayoutVersion": "1.0.0"}, indent=2) + "\n")
     (output / "index.json").write_text(
@@ -213,10 +241,7 @@ def build_step(manifest_path: Path, output: Path, image_ref: str) -> Path:
                         "artifactType": OCI_ARTIFACT_TYPE,
                         "digest": digest,
                         "size": len(encoded),
-                        "annotations": {
-                            "org.opencontainers.image.ref.name": image_ref
-                            or manifest["spec"]["execution"]["image"]
-                        },
+                        "annotations": {"org.opencontainers.image.ref.name": image_ref},
                     }
                 ],
             },
@@ -228,7 +253,7 @@ def build_step(manifest_path: Path, output: Path, image_ref: str) -> Path:
 
 
 class SyntaraRegistrationError(RuntimeError):
-    """Raised when the platform catalog cannot accept a published step."""
+    """Raised when the platform catalog cannot accept a published plugin."""
 
 
 def register_with_syntara(
@@ -237,11 +262,11 @@ def register_with_syntara(
     *,
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
-    """Register a published OCI step in Syntara's step catalog."""
+    """Register a published OCI plugin in Syntara's plugin catalog."""
 
     owns_client = client is None
     http_client = client or httpx.Client(timeout=10.0)
-    url = f"{api_url.rstrip('/')}/api/v1/step-types"
+    url = f"{api_url.rstrip('/')}/api/v1/plugins"
     try:
         try:
             response = http_client.post(url, json={"image_ref": image_ref})
@@ -263,29 +288,28 @@ def register_with_syntara(
             http_client.close()
 
 
-def push_step(
-    manifest_path: Path,
+def push_plugin(
+    plugin_path: Path,
     image_ref: str,
     *,
     registry_client: OCIRegistryClient | None = None,
     register_api_url: str | None = None,
     registration_client: httpx.Client | None = None,
 ) -> str:
-    """Publish the plugin artifact and optionally register it with Syntara."""
+    """Publish one plugin artifact and optionally register the plugin release."""
 
-    manifest = compile_manifest(manifest_path)
-    # spec.execution.image is deliberately left untouched: it names the runtime
-    # environment, not where this plugin artifact is published.
-    oci_manifest = _oci_manifest(manifest, image_ref)
+    oci_manifest, layer_contents = _oci_manifest(plugin_path, image_ref)
     owns_client = registry_client is None
     client = registry_client or OCIRegistryClient()
     try:
-        digest = client.push_manifest(image_ref, oci_manifest)
+        digest = client.push_manifest(image_ref, oci_manifest, layer_contents=[layer_contents])
     finally:
         if owns_client:
             client.close()
     if register_api_url:
-        register_with_syntara(image_ref, register_api_url, client=registration_client)
+        parsed = parse_image_reference(image_ref)
+        canonical_image_ref = f"{parsed.registry}/{parsed.repository}@{digest}"
+        register_with_syntara(canonical_image_ref, register_api_url, client=registration_client)
     return digest
 
 
@@ -298,24 +322,28 @@ def main(argv: list[str] | None = None) -> int:
     init_parser.add_argument("--tier", type=int, choices=[2, 3], required=True)
     init_parser.add_argument("--path", type=Path, default=None)
     init_parser.add_argument("--image")
-    init_parser.add_argument("--namespace", default=DEFAULT_NAMESPACE)
 
-    build_parser = subparsers.add_parser("build", help="package a Tier 3 step as an OCI artifact")
-    build_parser.add_argument("manifest", type=Path)
+    validate_parser = subparsers.add_parser(
+        "validate", help="validate a standalone manifest.yaml or root plugin.yaml"
+    )
+    validate_parser.add_argument("manifest", type=Path)
+
+    build_parser = subparsers.add_parser("build", help="package a root plugin as an OCI artifact")
+    build_parser.add_argument("plugin", type=Path)
     build_parser.add_argument("--output", type=Path, default=Path("oci-layout"))
-    build_parser.add_argument("--image", help="dedicated image reference override")
+    build_parser.add_argument("--registry", required=True, help="destination plugin artifact reference")
 
-    push_parser = subparsers.add_parser("push", help="push a Tier 3 manifest to an OCI registry")
-    push_parser.add_argument("manifest", type=Path, nargs="?", default=Path("manifest.yaml"))
+    push_parser = subparsers.add_parser("push", help="push a root plugin to an OCI registry")
+    push_parser.add_argument("plugin", type=Path, nargs="?", default=Path("plugin.yaml"))
     push_parser.add_argument(
         "--registry",
         required=True,
-        help="destination image reference, e.g. localhost:5000/syntara/steps/my-step:1.0.0",
+        help="destination plugin artifact reference, e.g. localhost:5000/syntara/plugins/my-plugin:1.0.0",
     )
     push_parser.add_argument(
         "--api-url",
         default=os.getenv("SYNTARA_API_URL", "http://localhost:5173"),
-        help="Syntara API base URL used to register the pushed step",
+        help="Syntara API base URL used to register the pushed plugin",
     )
     push_parser.add_argument(
         "--skip-register",
@@ -331,16 +359,26 @@ def main(argv: list[str] | None = None) -> int:
                 args.name,
                 args.tier,
                 args.image,
-                args.namespace,
             )
+            return 0
+        if args.command == "validate":
+            document = load_manifest(args.manifest)
+            if document.get("kind") == "Plugin":
+                descriptor = discover_plugin(args.manifest)
+                print(f"validated plugin with {len(descriptor.steps)} step(s)")
+                return 0
+            errors = validate_manifest(document)
+            if errors:
+                raise ValueError("Manifest validation failed:\n" + "\n".join(errors))
+            print("validated step manifest")
             return 0
         if args.command == "build":
             output = _resolve_within(args.output, Path.cwd())
-            result = build_step(args.manifest, output, args.image)
+            result = build_plugin(args.plugin, output, args.registry)
             print(result)
         else:
-            digest = push_step(
-                args.manifest,
+            digest = push_plugin(
+                args.plugin,
                 args.registry,
                 register_api_url=None if args.skip_register else args.api_url,
             )
@@ -353,6 +391,7 @@ def main(argv: list[str] | None = None) -> int:
         FileExistsError,
         FileNotFoundError,
         ValueError,
+        PluginDiscoveryError,
         SyntaraRegistrationError,
         yaml.YAMLError,
     ) as exc:

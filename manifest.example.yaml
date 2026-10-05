@@ -1,5 +1,5 @@
-# Syntara Step SDK - Canonical Manifest Template
-# This is the root template showing all available fields following Kubernetes CRD conventions.
+# Syntara Step SDK - Example Step Manifest
+# This template shows the available fields following Kubernetes CRD conventions.
 # Copy this template when creating new steps.
 
 apiVersion: syntara.io/v1alpha1
@@ -9,15 +9,8 @@ metadata:
   # Internal step identifier (snake_case) - used as primary key
   name: example_step
 
-  # Namespace grouping this step under its owning domain or vendor.
-  # namespace + name is the globally unique step identity.
-  namespace: syntara
-
   # Human-readable name displayed in UI palette and canvas
   displayName: Example Step
-
-  # Semantic version (MAJOR.MINOR.PATCH)
-  version: 1.0.0
 
   # Icon identifier for React Flow palette (see StepPaletteIcon in common-definitions.json)
   # Options: globe, database, script, webhook, loop, condition, git, cloud, mail, etc.
@@ -30,12 +23,12 @@ metadata:
 
   # Searchable tags for filtering in the step palette
   tags:
-    - category:action
     - integration:rest-api
     - network:external
 
-  # Author and licensing information
-  author: Your Name or Organization
+  # Optional author attribution
+  authors:
+    - name: Your Name or Organization
   license: Apache-2.0
 
   # Optional: Link to detailed documentation
@@ -46,23 +39,19 @@ spec:
   category: action
 
   # Sandbox, egress, and worker-pool policy are intentionally omitted here.
-  # Administrators provide those controls in POST /api/v1/step-types.
+  # Administrators supply those controls during plugin registration.
 
-  # Runtime environment. This is the image the execution plane runs the step
-  # IN -- not the step's OCI distribution artifact. Manifests do not declare
-  # where a step runs; the Execution Plane determines placement from category,
-  # resource requirements, and administrative policy.
+  # Workload image. It contains this step's implementation, dependencies, and
+  # step-side gRPC server/runtime; it is distinct from the metadata package
+  # artifact. The manifest does not choose control-plane or EP placement.
   execution:
-    # The runtime environment: an interpreter plus the SDK, named for what it
-    # provides. It holds no step code -- the implementations live in the plugin
-    # artifact. Usually a generic runner reused across steps and plugins; a
-    # step with unusual dependencies may warrant its own. Null if none needed.
-    image: quay.io/syntara/python-executor:1.0.0
+    # Pin an implementation-bearing workload image. It must exactly match a
+    # repository/digest entry in the root plugin inventory.
+    image: quay.io/example/my-http-step@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
-    # Step handle, "module.path:ClassName", resolving to this step's BaseStep
-    # subclass inside the plugin artifact. A plugin can package several steps,
-    # so the runtime uses this to load the right one. Not a shell command --
-    # a subprocess would bypass the base class's validation and redaction.
+    # Optional control-plane loading handle, "module.path:ClassName", resolved
+    # from the workload image. It is not a container command, is not used by
+    # the step-side gRPC path, and does not select placement.
     entrypoint: main:ExampleStep
 
   # Developer-declared extension requirements. These describe the capabilities
