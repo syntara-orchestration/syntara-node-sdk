@@ -69,7 +69,9 @@ def _integration() -> dict[str, object]:
     }
 
 
-def _credential_recipe(*, integration_type: str = "acme.issue-tools.github-connection") -> dict[str, object]:
+def _credential_recipe(
+    *, integration_type: str = "acme.issue-tools.github-connection"
+) -> dict[str, object]:
     return {
         "apiVersion": "syntara.io/v1alpha1",
         "kind": "CredentialRecipe",
@@ -199,7 +201,11 @@ def test_compiler_canonicalizes_connection_types_and_binds_an_action_to_them() -
     action = _action({"kind": "inline", "value": {"type": "object"}})
     action_spec = action["spec"]
     assert isinstance(action_spec, dict)
-    action_spec["runtime"] = {"kind": "platform-runner", "driver": "http.v1", "operation": _http_operation()}
+    action_spec["runtime"] = {
+        "kind": "platform-runner",
+        "driver": "http.v1",
+        "operation": _http_operation(),
+    }
     action_spec["integrationType"] = "acme.issue-tools.github-connection"
 
     result = compile_model(

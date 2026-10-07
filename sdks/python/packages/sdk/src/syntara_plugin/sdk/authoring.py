@@ -732,8 +732,13 @@ def _validate_connection_contracts(
         if not isinstance(declared_credentials, list):
             continue
         for credential_id in declared_credentials:
-            credential = credentials.get(credential_id) if isinstance(credential_id, str) else None
-            if credential is None or credential.get("integrationType") != integration_id:
+            resolved_credential = (
+                credentials.get(credential_id) if isinstance(credential_id, str) else None
+            )
+            if (
+                resolved_credential is None
+                or resolved_credential.get("integrationType") != integration_id
+            ):
                 diagnostics.append(
                     _diagnostic(
                         "INTEGRATION_CREDENTIAL_UNDECLARED",
