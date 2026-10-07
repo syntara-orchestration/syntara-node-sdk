@@ -97,16 +97,6 @@ spec:
         examples:
           - https://api.example.com/v1/resource
 
-      # Non-credential sensitive data (PII, business-sensitive fields) is
-      # flagged with redact: true. The value is supplied as a normal input; the
-      # platform keeps it out of outputs, logs, errors, and persisted state.
-      # Authentication credentials must NOT be declared here -- use
-      # spec.credentialSpecification.credential_references instead.
-      customer_email:
-        type: string
-        description: Customer email address used to look up the record
-        redact: true
-
       # Example: Enum with default
       method:
         type: string

@@ -20,7 +20,7 @@ def parse_entrypoint(entrypoint: str) -> tuple[str, str]:
     the plugin artifact. A plugin may package several steps, so the runtime
     needs the handle to load the right one. It is deliberately not a shell
     command: the step must be invoked *through* its base class so that input
-    validation and redaction checks still run.
+    validation still runs.
     """
 
     module_path, separator, class_name = entrypoint.partition(":")

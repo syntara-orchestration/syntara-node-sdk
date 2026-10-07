@@ -44,9 +44,6 @@ spec:
               type: string
       environment_variables:
         type: object
-        # Environment maps can carry tokens and passwords; treat the value map
-        # as sensitive unless a step-specific contract narrows it further.
-        redact: true
         patternProperties:
           "^[a-zA-Z_][a-zA-Z0-9_]*$":
             type: string
