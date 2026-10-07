@@ -1,0 +1,11 @@
+{
+  "apiVersion": "syntara.io/v1alpha1",
+  "kind": "InstalledIdentity",
+  "metadata": {"name": "github-create-issue", "displayName": "GitHub create issue", "description": "An installed GitHub action revision."},
+  "spec": {
+    "plugin": {"namespace": "syntara", "name": "github", "version": "1.0.0", "artifactDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+    "target": {"kind": "action", "name": "create-issue"},
+    "revisionDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "registryGeneration": 42
+  }
+}

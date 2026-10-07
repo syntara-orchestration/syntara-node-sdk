@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/provider.schema.json",
+  "oneOf": [{"$ref": "#/$defs/request"}, {"$ref": "#/$defs/result"}, {"$ref": "#/$defs/cancellation"}],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9._:-]+$"},
+    "digestReference": {"type": "string", "pattern": "^[a-z0-9][a-z0-9./_-]*@sha256:[a-f0-9]{64}$"},
+    "request": {"type": "object", "additionalProperties": false, "required": ["apiVersion", "kind", "invocationId", "providerRevisionId", "imageDigest", "runtimeAbi", "connectionHandle", "fieldPath", "dependencies", "deadline"], "properties": {"apiVersion": {"const": "syntara.io/v1alpha1"}, "kind": {"const": "FormProviderRequest"}, "invocationId": {"$ref": "#/$defs/id"}, "providerRevisionId": {"$ref": "#/$defs/id"}, "imageDigest": {"$ref": "#/$defs/digestReference"}, "runtimeAbi": {"const": "syntara.provider/v1alpha1"}, "connectionHandle": {"$ref": "#/$defs/id"}, "fieldPath": {"type": "string", "pattern": "^/"}, "dependencies": {"type": "object"}, "query": {"type": "string", "maxLength": 1024}, "cursor": {"type": "string", "maxLength": 1024}, "deadline": {"type": "string", "format": "date-time"}, "capabilityHandle": {"$ref": "#/$defs/id"}}},
+    "result": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "kind", "invocationId"],
+      "properties": {
+        "apiVersion": {"const": "syntara.io/v1alpha1"}, "kind": {"const": "FormProviderResult"}, "invocationId": {"$ref": "#/$defs/id"},
+        "options": {"type": "array", "maxItems": 1000, "items": {"type": "object", "additionalProperties": false, "required": ["label", "value"], "properties": {"label": {"type": "string", "maxLength": 512}, "value": {"type": ["string", "number", "boolean"]}, "description": {"type": "string", "maxLength": 2048}}}},
+        "schema": {"type": "object"}, "nextCursor": {"type": "string", "maxLength": 1024}
+      },
+      "oneOf": [{"required": ["options"]}, {"required": ["schema"]}]
+    },
+    "cancellation": {"type": "object", "additionalProperties": false, "required": ["apiVersion", "kind", "invocationId"], "properties": {"apiVersion": {"const": "syntara.io/v1alpha1"}, "kind": {"const": "FormProviderCancellation"}, "invocationId": {"$ref": "#/$defs/id"}}}
+  }
+}

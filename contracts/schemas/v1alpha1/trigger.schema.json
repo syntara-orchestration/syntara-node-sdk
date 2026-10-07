@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/trigger.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "syntara.io/v1alpha1"},
+    "kind": {"const": "Trigger"},
+    "metadata": {"$ref": "common.schema.json#/$defs/targetMetadata"},
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["driver", "configuration", "output"],
+      "properties": {
+        "driver": {"type": "string", "pattern": "^[a-z][a-z0-9-]*\\.v[0-9]+$"},
+        "configuration": {"$ref": "common.schema.json#/$defs/documentSource"},
+        "output": {"$ref": "common.schema.json#/$defs/documentSource"}
+      }
+    }
+  }
+}

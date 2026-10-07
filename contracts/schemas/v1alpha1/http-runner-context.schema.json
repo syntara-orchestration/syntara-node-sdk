@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/http-runner-context.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["driver", "operation", "outputSchemaDigest"],
+  "properties": {
+    "driver": {"const": "http.v1"},
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path"],
+      "properties": {
+        "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^/(?!/)(?!.*(?:^|/)\\.\\.?/)[A-Za-z0-9._~!$&'()*+,;=:@{}\\-/]*$"
+        },
+        "requestMap": {"$ref": "http-operation.schema.json"},
+        "responseMap": {"$ref": "http-operation.schema.json"}
+      }
+    },
+    "outputSchemaDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}

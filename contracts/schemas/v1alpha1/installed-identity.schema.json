@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/installed-identity.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "syntara.io/v1alpha1"},
+    "kind": {"const": "InstalledIdentity"},
+    "metadata": {"$ref": "common.schema.json#/$defs/targetMetadata"},
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plugin", "target", "revisionDigest", "registryGeneration"],
+      "properties": {
+        "plugin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["namespace", "name", "version", "artifactDigest"],
+          "properties": {
+            "namespace": {"$ref": "common.schema.json#/$defs/identifier"},
+            "name": {"$ref": "common.schema.json#/$defs/identifier"},
+            "version": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"},
+            "artifactDigest": {"$ref": "common.schema.json#/$defs/sha256Digest"}
+          }
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name"],
+          "properties": {
+            "kind": {"enum": ["action", "trigger"]},
+            "name": {"$ref": "common.schema.json#/$defs/identifier"}
+          }
+        },
+        "revisionDigest": {"$ref": "common.schema.json#/$defs/sha256Digest"},
+        "registryGeneration": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

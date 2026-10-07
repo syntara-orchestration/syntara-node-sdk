@@ -1,0 +1,17 @@
+{
+  "apiVersion": "syntara.io/v1alpha1",
+  "kind": "Action",
+  "metadata": {
+    "namespace": "acme",
+    "name": "create-issue",
+    "version": "not-semver",
+    "displayName": "Create issue",
+    "description": "Creates an issue."
+  },
+  "spec": {
+    "runtime": {"kind": "platform-runner", "abi": "syntara.container/v1alpha1"},
+    "input": {"kind": "asset", "path": "../secret.json"},
+    "output": {"kind": "inline", "value": {}},
+    "error": {"kind": "inline", "value": {}}
+  }
+}

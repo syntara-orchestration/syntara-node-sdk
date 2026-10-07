@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/common.schema.json",
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
+    "fieldIdentifier": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}$"},
+    "qualifiedIdentifier": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}(?:\\.[a-z][a-z0-9-]{0,62})+$"},
+    "sha256Digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "rfc3339Timestamp": {"type": "string", "format": "date-time"},
+    "repository": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._/-]{0,254}$"},
+    "opaqueReference": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "name", "version", "displayName", "description"],
+      "properties": {
+        "namespace": {"$ref": "#/$defs/identifier"},
+        "name": {"$ref": "#/$defs/identifier"},
+        "version": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"},
+        "displayName": {"type": "string", "minLength": 1, "maxLength": 128},
+        "description": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }
+    },
+    "targetMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "displayName", "description"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "displayName": {"type": "string", "minLength": 1, "maxLength": 128},
+        "description": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }
+    },
+    "documentSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {"kind": {"const": "inline"}, "value": {"type": "object"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "path"],
+          "properties": {"kind": {"const": "asset"}, "path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"}}
+        }
+      ]
+    }
+  }
+}

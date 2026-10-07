@@ -1,0 +1,6 @@
+{
+  "apiVersion": "syntara.io/v1alpha1",
+  "kind": "TriggerDriver",
+  "metadata": {"name": "webhook", "displayName": "Webhook", "description": "Syntara-owned webhook ingress driver."},
+  "spec": {"id": "webhook.v1", "transport": "webhook", "events": ["pull-request.opened", "pull-request.closed"]}
+}

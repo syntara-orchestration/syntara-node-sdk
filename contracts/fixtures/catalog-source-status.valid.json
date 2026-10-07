@@ -1,0 +1,10 @@
+{
+  "apiVersion": "syntara.io/v1alpha1",
+  "kind": "CatalogSourceStatus",
+  "metadata": {"sourceId": "local-quay", "observedAt": "2026-10-06T12:00:00Z"},
+  "status": {
+    "state": "accepted",
+    "acceptedGeneration": 42,
+    "acceptedIndexDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

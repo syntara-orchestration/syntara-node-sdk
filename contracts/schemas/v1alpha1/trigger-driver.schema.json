@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/trigger-driver.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "syntara.io/v1alpha1"},
+    "kind": {"const": "TriggerDriver"},
+    "metadata": {"$ref": "common.schema.json#/$defs/targetMetadata"},
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "transport", "events"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*\\.v[0-9]+$"},
+        "transport": {"enum": ["webhook", "schedule", "event-source", "poll"]},
+        "events": {"type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$"}}
+      }
+    }
+  }
+}

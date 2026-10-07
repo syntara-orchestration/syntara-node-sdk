@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/http-operation.schema.json",
+  "$defs": {
+    "mapping": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 128,
+      "propertyNames": {"$ref": "common.schema.json#/$defs/fieldIdentifier"},
+      "additionalProperties": {"$ref": "#/$defs/mappingValue"}
+    },
+    "mappingValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from"],
+          "properties": {
+            "from": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^(?:/(?:[^~/]|~[01])*)+$"
+            },
+            "optional": {"type": "boolean"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["literal"],
+          "properties": {
+            "literal": {
+              "type": ["string", "number", "boolean", "null"],
+              "maxLength": 65536
+            }
+          }
+        }
+      ]
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path"],
+      "properties": {
+        "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^/(?!/)(?!.*(?:^|/)\\.\\.?/)[A-Za-z0-9._~!$&'()*+,;=:@{}\\-/]*$"
+        },
+        "requestMap": {"$ref": "common.schema.json#/$defs/documentSource"},
+        "responseMap": {"$ref": "common.schema.json#/$defs/documentSource"}
+      }
+    }
+  },
+  "$ref": "#/$defs/mapping"
+}

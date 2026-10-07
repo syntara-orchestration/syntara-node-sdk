@@ -1,0 +1,11 @@
+{
+  "apiVersion": "syntara.io/v1alpha1",
+  "kind": "IntegrationType",
+  "metadata": {"name": "github", "displayName": "GitHub", "description": "GitHub Cloud or Enterprise Server connection."},
+  "spec": {
+    "id": "syntara.github.connection",
+    "endpointKinds": ["github-cloud", "github-enterprise"],
+    "credentialTypes": ["syntara.github.oauth", "syntara.github.service-token"],
+    "configuration": {"kind": "inline", "value": {"type": "object", "additionalProperties": false}}
+  }
+}

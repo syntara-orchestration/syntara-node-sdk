@@ -1,0 +1,17 @@
+{
+  "apiVersion": "syntara.io/v1alpha1",
+  "kind": "CatalogSource",
+  "metadata": {"name": "local-quay", "displayName": "Local Quay", "description": "Development plugin catalog."},
+  "spec": {
+    "sourceId": "local-quay",
+    "registryOrigin": "https://quay.local.test",
+    "indexRepository": "syntara/catalog",
+    "channel": "stable",
+    "repositoryScopes": ["syntara/plugins"],
+    "credentialRef": "secret://catalog/local-quay",
+    "trustPolicyRef": "policy://catalog/local-quay",
+    "customCaRef": "secret://ca/local-quay",
+    "mirrorPolicy": "digest-preserving",
+    "reconciliationIntervalSeconds": 300
+  }
+}

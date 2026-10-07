@@ -1,364 +1,200 @@
 # Syntara Plugin SDK
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Python 3.12-3.14](https://img.shields.io/badge/python-3.12--3.14-blue.svg)](https://www.python.org/downloads/)
-[![PostgreSQL 15+](https://img.shields.io/badge/postgresql-15+-blue.svg)](https://www.postgresql.org/)
+This repository is the workspace for the public Syntara plugin authoring toolchain.
 
-A schema-driven framework for authoring, packaging, and registering custom automation steps for workflow orchestration. Build type-safe, composable automation steps with declarative YAML manifests that compile to runtime-ready JSON definitions.
+## Packages
 
-## Features
+```text
+contracts/                    # Language-neutral schemas, fixtures, and ABI source
 
-- **🎯 Type-Safe Authoring** — Author steps in human-friendly YAML with JSON Schema validation (Draft-07)
-- **🔒 Zero-Trust Security** — Authentication credentials are platform-managed UUID references, never step inputs; non-credential sensitive data is flagged `redact: true` and kept out of outputs, logs, and persisted state
-- **📦 Four-Category Taxonomy** — `action` (integrations), `task` (compute), `workflow` (control flow), `trigger` (events)
-- **⚡ Fast Canvas Rendering** — Compiled step definitions enable <500ms dynamic form rendering
-- **🔌 Kubernetes-Native** — Follows K8s CRD conventions (`apiVersion`, `kind`, `metadata`, `spec`)
-- **🛡️ Declarative Permissions** — Static capability inspection before execution-plane dispatch
-- **🔄 Backwards Compatible** — Immutable output envelope (`StandardOutputWrapper`) ensures stable template expressions
-
-## Quick Start
-
-### Installation
-
-```bash
-# Install the Python SDK
-pip install -e ./sdk-python
-
-# Or install from the repository root
-pip install -e .
+sdks/
+└── python/
+    ├── packages/
+    │   ├── sdk/       # syntara-plugin-sdk -> syntara_plugin.sdk
+    │   ├── runtime/   # syntara-plugin-runtime -> syntara_plugin.runtime
+    │   └── contracts/ # syntara-plugin-contracts -> syntara_plugin.contracts
+    └── tests/
 ```
 
-### Scaffold and Package Steps
+- `syntara-plugin-contracts` owns versioned JSON Schema/OpenAPI contracts, deterministic contract bundles, the normative generic-container request-hash rule, and the language-neutral `ContainerService` protobuf source.
+- `syntara-plugin-runtime` owns the minimal runtime-facing interfaces and generated bindings for its language. Its generic container runtime dispatches a selected immutable step revision to one action callable inside a plugin image.
+- `syntara-plugin-sdk` owns typed/YAML authoring, deterministic compilation, offline assembly of metadata-only OCI plugin artifacts and catalog indexes, bounded publication of already-built plugin and catalog-index artifacts, and a small offline authoring CLI. Image building, signing, and catalog-index coordination remain later increments.
 
-Use the CLI to create step source and declare its workload image. Before a
-plugin can be built, resolve each workload image to an immutable digest and
-add the exact repository/digest to the root plugin inventory:
+The repository groups implementation by language so future SDKs can live beside Python under `sdks/typescript/`, `sdks/go/`, and similar directories. Python distributions retain the published `syntara-plugin-*` names, while their clean-break public imports share the `syntara_plugin` namespace: `.sdk`, `.runtime`, and `.contracts`.
 
-```bash
-syntara-sdk init normalize_payload --tier 2
-syntara-sdk init customer_lookup --tier 3 --image quay.io/example/customer-lookup@sha256:<64-hex-digest>
-# Copy plugin.example.yaml to plugin.yaml, point targets at the manifests,
-# and use digest-pinned workload references in both files.
-# For example: quay.io/example/customer-lookup@sha256:<64-hex-digest>
-syntara-sdk build plugin.yaml --registry localhost:5000/syntara/plugins/customer-lookup:1.0.0 --output customer-lookup-oci
+`contracts/` is the source of truth for versioned schemas, conformance fixtures, and the container ABI protobuf source. Language SDKs package or generate from those files; they do not own copies of them. [ADR 0001](.sdlc/adrs/0001-language-sdk-layout.md) records this repository-layout decision.
 
-# Local prototype: publish to OCI, then register in Syntara automatically
-syntara-sdk push plugin.yaml \
-  --registry localhost:5000/syntara/plugins/customer-lookup:1.0.0
-```
+The initial contract is `syntara.io/v1alpha1`. A plugin root names explicit action and trigger target files. Action and trigger targets are separate contracts, and all schema references resolve from the packaged local bundle.
 
-Builds emit one OCI artifact per plugin. Its metadata contains the validated root
-manifest plus compiled descriptors for every explicitly targeted step, including a
-deterministic `contentDigest` for each descriptor. Runtime images named by targeted
-steps must be listed at the root as immutable `repository`/`sha256` inventory entries.
+## Action runtime choice
 
-`push` publishes the OCI metadata and then calls
-`POST /api/v1/plugins` to add every step in the plugin release to Syntara's catalog.
-Use `--skip-register` for registry-only publishing or `--api-url` to target a
-different Syntara instance.
+An action makes one clear runtime choice:
 
-For a private registry, set `SYNTARA_OCI_USERNAME` and `SYNTARA_OCI_PASSWORD`.
-The OCI client probes `/v2/` anonymously, follows a registry's same-origin Bearer challenge
-when present, and retries Basic-auth registries with the configured credentials.
+- A Syntara-managed action uses `runtime.kind: platform-runner` and declares a versioned driver such as `http.v1`. It must not name an image or ABI. `http.v1` additionally requires a bounded declarative operation: an HTTP method, an origin-less relative path template, and optional field-to-JSON-Pointer-or-literal request/response maps. During installation, Syntara maps the driver to an administrator-approved, immutable runner profile.
+- A publisher-supplied action uses `runtime.kind: custom-workload`. It must not declare a driver; its one plugin-level workload binding supplies the executable image and ABI through the signed artifact.
 
-### Create Your First Step
+This lets an author describe a GitHub request without choosing Syntara's container image, while retaining an explicit image boundary for code that the publisher actually owns.
 
-**1. Copy the plugin and step manifest examples:**
+`syntara_plugin.runtime.HttpOperationMapper` is the shared, pure interpreter
+for that operation shape. It builds a relative request path and JSON body or
+projects a parsed response; it never selects an endpoint, reads a credential,
+or performs HTTP. Author-supplied path templates cannot contain a percent
+escape. Trusted string input is interpolated as one percent-encoded path
+segment after rejecting separators, pre-encoded values, query/fragment
+characters, and dot segments.
 
-```bash
-# Examples are labeled so they are not mistaken for manifests belonging to this repository.
-cp plugin.example.yaml plugin.yaml
-mkdir -p steps/my_http_step
-cp manifest.example.yaml steps/my_http_step/manifest.yaml
-cd steps/my_http_step
-```
+## Offline OCI artifact assembly
 
-**2. Edit `manifest.yaml` (K8s CRD structure):**
+`syntara_plugin.sdk.build_plugin_artifact()` turns successful compiler output
+into a byte-for-byte deterministic, metadata-only OCI artifact. It produces a
+canonical plugin-metadata layer, a fixed-metadata gzip/tar content bundle for
+externalized schema and `http.v1` mapping assets plus optional UTF-8 Markdown documentation, and a
+config blob that records every bundled asset's normalized path, typed-source
+reference, media type, exact source-byte digest, byte size, and canonical
+parsed-document digest. It performs no registry, signing, image
+build, credential, or network operation.
+
+An author includes one plugin-level document with an ordinary workspace path:
 
 ```yaml
-apiVersion: syntara.io/v1alpha1
-kind: StepType
-
-metadata:
-  name: my_http_step
-  displayName: My HTTP Step
-  icon: globe
-  description: Custom HTTP request step with retry logic
-  tags:
-    - integration:rest-api
-    - network:external
-  license: Apache-2.0
-
 spec:
-  category: action
-  execution:
-    image: quay.io/syntara/http-request-executor@sha256:1111111111111111111111111111111111111111111111111111111111111111
-    entrypoint: src.main:MyHttpStep
-
-  declaredRequirements:
-    capabilities:
-      - network-egress
-      - readonly-root-filesystem
-    platformVersion: ">=3.0.0"
-
-  schedulingControls:
-    connectivity_requirements:
-      - host: api.github.com
-        ports:
-          - port: 443
-            protocol: TCP
-
-  inputs:
-    properties:
-      url:
-        type: string
-        description: Target URL
-      method:
-        type: string
-        enum: [GET, POST, PUT, DELETE]
-        default: GET
-    required:
-      - url
-
-  outputs:
-    allOf:
-      - $ref: "../../schemas/common-definitions.json#/definitions/StandardOutputWrapper"
-
-  resourceRequirements:
-    limits:
-      cpu: 500m
-      memory: 256Mi
-    requests:
-      cpu: 100m
-      memory: 128Mi
-
-  executionTimeout: 60
+  documentation:
+    path: docs/README.md
 ```
 
-### Validate & Test
+The compiler accepts only contained regular UTF-8 `.md` files without NUL
+bytes. It records the exact SHA-256 digest in the canonical descriptor and the
+asset index; the same bytes enter the deterministic content bundle. The future
+catalog reader must verify that binding before it offers the document to users.
 
-**Validate manifest using SDK:**
+This is intentionally an in-process API first. The CLI, later local service,
+IDE, signer, and registry adapters must call this same API rather than
+reimplementing artifact layout or digest calculation.
+
+## Offline authoring CLI
+
+The Python SDK package provides a deliberately small, offline `syntara-plugin`
+command. It creates one safe, reviewable YAML workspace and delegates all
+source interpretation to the public compiler API:
+
+```sh
+syntara-plugin init ./my-plugin --namespace acme
+syntara-plugin validate ./my-plugin/plugin.yaml
+syntara-plugin inspect ./my-plugin/plugin.yaml > descriptor.json
+```
+
+`init` never overwrites an existing path. `validate` reports the compiler's
+stable diagnostics, while `inspect` writes the exact canonical descriptor that
+the artifact builder would use. This initial command surface does not build an
+image, resolve a tag, sign or publish an artifact, contact a registry, or read
+credentials. Those operations remain explicit SDK adapters rather than hidden
+CLI side effects.
+
+## Bounded OCI publication
+
+`PluginArtifactPublisher` and `CatalogIndexPublisher` are intentionally narrow
+registry adapters for already-built artifacts. The plugin publisher uploads the
+plugin config, canonical descriptor, and content bundle. The catalog publisher
+uploads the catalog config and catalog-index content. Each advances only one
+explicitly selected channel after all immutable blobs are present.
+
+They do not compile source, build a workload image, sign an artifact, discover
+repositories, read a catalog's current channel, or store a registry credential.
+That separation makes an artifact digest reviewable before the next operation
+uses it.
+
+The target uses HTTPS by default. The only HTTP exception requires the explicit
+`allow_insecure_loopback_http=True` option and one of the local development
+origins (`localhost` or `127.0.0.1`). A registry Bearer challenge is followed
+only when its token endpoint has the same origin as the selected registry; the
+publisher keeps the supplied Basic credential and exchanged Bearer value in
+memory for the one invocation.
 
 ```python
-from syntara_sdk.compiler import compile_manifest, validate_manifest
+from syntara_plugin.sdk import (
+    PluginArtifactPublicationTarget,
+    PluginArtifactPublisher,
+    CatalogIndexPublicationTarget,
+    CatalogIndexPublisher,
+    RegistryCredentials,
+)
 
-# Validate only
-manifest = {"apiVersion": "syntara.io/v1alpha1", ...}
-errors = validate_manifest(manifest)
-if errors:
-    print("Validation errors:", errors)
+plugin_publication = PluginArtifactPublisher(
+    PluginArtifactPublicationTarget(
+        registry_origin="https://registry.example.test",
+        repository="acme/plugins/github",
+        channel="0.1.0",
+    ),
+    credentials=RegistryCredentials("publisher", password),
+).publish(plugin_artifact)
 
-# Compile (validates + prepares a descriptor)
-descriptor = compile_manifest("steps/my-http-step/manifest.yaml")
-print(f"✓ Compiled: {descriptor['metadata']['name']}")
+publication = CatalogIndexPublisher(
+    CatalogIndexPublicationTarget(
+        registry_origin="https://registry.example.test",
+        repository="acme/catalog-index",
+        channel="stable",
+    ),
+    credentials=RegistryCredentials("publisher", password),
+).publish(catalog_artifact)
+
+print(publication.immutable_reference)
 ```
 
-**Test your step locally:**
+The catalog entry uses `plugin_publication.manifest_digest`, never its mutable
+channel. On an index update, the authoring or CI workflow must also build the
+next catalog document with the accepted predecessor digest in
+`metadata.previousIndexDigest`; the publisher intentionally does not read or
+guess it.
 
-```bash
-# Run the SDK runner
-python -m syntara_sdk.runner \
-  --module my_step_package.src.main \
-  --class MyStep \
-  --inputs-file test_inputs.json
-```
-
-### Publish and Register
-
-The OCI registry is the artifact source, and Syntara PostgreSQL is hydrated by
-the registration API. The CLI publishes the OCI manifest and then registers the
-image with Syntara automatically:
-
-```bash
-syntara-sdk push plugin.yaml \
-  --registry localhost:5000/syntara/plugins/http-request:1.0.0 \
-  --api-url http://localhost:5173
-```
-
-Use `--skip-register` when publishing to a registry without making the step
-available in Syntara yet. An administrator or deployment process can then
-register the existing plugin metadata artifact later by posting its `image_ref` to
-`POST /api/v1/plugins`.
-
-## Architecture
-
-Syntara follows a **define-once, consume-everywhere** model:
-
-```mermaid
-graph LR
-    AUTHOR["Author<br/>manifest.yaml"]
-    VALIDATE["Validate<br/>(JSON Schema)"]
-    BUILD["Build<br/>step-definition.json"]
-    REGISTRY["Registry<br/>(PostgreSQL)"]
-    CANVAS["Canvas<br/>(React UI)"]
-    ORCHESTRATOR["Orchestrator<br/>(Workflow Engine)"]
-
-    AUTHOR --> VALIDATE --> BUILD --> REGISTRY
-    REGISTRY --> CANVAS
-    REGISTRY --> ORCHESTRATOR
-```
-
-### Step Categories
-
-| Category | Purpose | Examples |
-|----------|---------|----------|
-| **action** | External API integrations | HTTP requests, GitHub issues, Slack messages |
-| **task** | Atomic compute operations | Script executor, data transformation |
-| **workflow** | Control flow and composition logic | Loops, conditions, switches, subworkflow calls |
-| **trigger** | Event entry points | Webhooks, schedules, subworkflow triggers |
-
-### Execution Placement
-
-Manifests do not declare where a step runs; AO/admin policy selects placement. The plugin OCI
-artifact is declarative metadata only. `spec.execution.image` names the separate workload OCI
-image, which contains the step implementation, dependencies, and step-side gRPC runtime.
-`spec.execution.entrypoint` (`module.path:ClassName`) is an optional control-plane loading handle,
-not the container process entrypoint, and it is not required by the step-side gRPC path. Its
-presence does not select placement: every workload image supports the gRPC path, while an
-entrypoint indicates that direct control-plane loading is supported. Control-plane loading from
-workload images is not implemented yet. See [Dispatch and Handoff](docs/architecture.md#dispatch-and-handoff).
-
-## Examples
-
-The SDK includes reference implementations for each step category:
-
-| Example | Category | Location |
-|---------|----------|----------|
-| **HTTP Request** | action | [tests/fixtures/steps/http_request/](tests/fixtures/steps/http_request/) |
-| **Script Executor** | task | [tests/fixtures/steps/script_executor/](tests/fixtures/steps/script_executor/) |
-| **Subworkflow Call** | workflow | [tests/fixtures/steps/subworkflow_call/](tests/fixtures/steps/subworkflow_call/) |
-| **Subworkflow Trigger** | trigger | [tests/fixtures/steps/subworkflow_trigger/](tests/fixtures/steps/subworkflow_trigger/) |
-
-### Run Example Tests
-
-```bash
-# Registry platform tests (9 tests)
-pytest tests/registry/test_postgres_registry.py
-
-# HTTP Request step unit tests (12 tests)
-pytest tests/test_http_step.py -v
-
-# Run step directly with CLI runner
-python -m syntara_sdk.runner \
-  --module tests.fixtures.steps.http_request.src.main \
-  --class HttpRequestStep \
-  --inputs-file test_inputs.json
-```
-
-## Security Model
-
-### Zero-Trust Credentials
-
-Authentication credentials are never step inputs. Manifests and compiled descriptors store abstract UUID references only; the execution plane resolves them and supplies the values out of band:
-
-```yaml
-spec:
-  credentialSpecification:
-    credential_requirements:
-      - name: api_auth
-        types: [API Key, Bearer Token]
-        mount_type: tmpfs_file
-        mount_path: /tmp/api-key
-```
-
-Non-credential sensitive data (PII, business-sensitive fields) *is* supplied as a normal input, flagged `redact: true`. Neither a credential value nor a `redact`-flagged value may appear in `StandardOutputWrapper` fields, workflow variables, error messages, stack traces, execution logs, or persisted state. The platform dispatcher and execution plane enforce this and are the authoritative security boundary; SDK base classes additionally check that a step does not echo a flagged input into its output.
-
-### Declarative Permissions
-
-Every step declares its requirements upfront in the manifest:
-
-```yaml
-spec:
-  declaredRequirements:
-    capabilities:
-      - network-egress        # Can make outbound HTTP requests
-      - script-execution      # Can execute scripts
-      - tmpfs-mount          # Needs ephemeral storage
-    platformVersion: ">=3.0.0"
-
-  schedulingControls:
-    connectivity_requirements:
-      - host: api.github.com
-        ports:
-          - port: 443
-            protocol: TCP
-```
-
-Administrators can audit these requirements **before** execution-plane dispatch. The execution plane consumes the declarations together with registration policy to apply its runtime controls.
-
-## Documentation
-
-- **[Architecture Guide](docs/architecture.md)** — Complete technical specification
-- **[Common Definitions](schemas/common-definitions.json)** — Platform meta-schema (JSON Schema Draft-07)
-- **[HTTP Request Example](tests/fixtures/steps/http_request/)** — Full `action` step reference implementation
-- **[Script Executor Example](tests/fixtures/steps/script_executor/)** — Full `task` step reference implementation
-- **[Subworkflow Trigger Example](tests/fixtures/steps/subworkflow_trigger/)** — Child-side `trigger` descriptor and Reference-mode eligibility contract
-- **[Subworkflow Call Example](tests/fixtures/steps/subworkflow_call/)** — Parent-side `workflow` step descriptor for Reference-mode child invocation
+The `metadata.sourceId` within `catalog_artifact` is the stable source identity
+that the Syntara control plane will configure. They must be equal:
+Syntara rejects an artifact published for a different source rather than
+allowing one catalog channel to be replayed by another source. Local Quay is a
+development-only unsigned exception; it proves catalog discovery and safe
+documentation hydration, never plugin installation or execution, and never
+changes production signing or HTTPS requirements.
 
 ## Development
 
-### Prerequisites
+Use the shared project environment:
 
-- **Python 3.12–3.14**
-- **PostgreSQL 15+** (for registry storage)
-- **Kubernetes/OpenShift cluster** (for container step execution)
-- **uv** (Python package manager): `pip install uv`
-
-### Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/syntara-orchestration/syntara-plugin-sdk.git
-cd syntara-plugin-sdk
-
-# Install the locked development dependencies
-uv sync --locked --group dev
-
-# Set up PostgreSQL test database (optional)
-export SYNTARA_TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/syntara_test
-
-# Run the full quality suite
-uv run --no-sync --no-build pre-commit run --all-files
-PYTHONPATH=sdk-python:tools uv run --no-sync --no-build pytest
+```zsh
+source /Users/gnalawad/Documents/projects/ao/github/.venv/bin/activate
+uv sync --all-groups --active --inexact
+python -m pytest
 ```
 
-### Testing and quality checks
+Each repository retains its own `pyproject.toml` and `uv.lock`; `--inexact` keeps shared-environment dependencies from sibling repositories intact.
 
-CI runs the full test suite on Python 3.12, 3.13, and 3.14, plus pre-commit checks
-(Ruff linting and mypy type checking) on Python 3.12.
-Run the same checks locally from the repository root:
+## Container runtime protocol
 
-```bash
-make install
-make test
-make check
+The container ABI is the application-data channel between the Execution Plane
+and an isolated plugin workload. One plugin image can register more than one
+immutable step revision. For example, `github.create-issue.v1` and
+`github.close-issue.v1` may share a GitHub plugin image, while each workflow
+step invocation selects exactly one of those revisions.
+
+The request contains the selected step revision, a bounded JSON input object,
+an optional bounded non-secret runtime context, the timeout, and paths to
+credential files already mounted by the Execution Plane. It never contains a
+command, image reference, endpoint, or plaintext secret. For example, the
+`http.v1` runner context contains its resolved operation and output-schema
+digest, not an HTTP origin or authorization header. The protocol reserves
+bounded progress and requires exactly one structured result or failure. The
+current Python dispatcher implements safe terminal results, failures, health,
+and cancellation; progress-producing action interfaces are a follow-on
+addition. The control plane and Execution Plane retain image routing,
+credential issuance, transport security, and workload-network policy.
+
+The canonical protobuf source is
+`contracts/proto/syntara_plugin/runtime/protocol/container.proto`. Regenerate
+the Python binding after changing it:
+
+```zsh
+make generate-container-protocol
+python -m pytest sdks/python/tests/runtime/test_container_protocol.py
 ```
 
-Use `make lint` or `make typecheck` to run either pre-commit hook independently.
-
-### Project Structure
-
-```
-syntara-step-sdk/
-├── plugin.example.yaml                # Root plugin manifest example
-├── manifest.example.yaml              # Step manifest example
-├── plugin.schema.json                 # Root plugin schema entry point
-├── manifest.schema.json               # Step schema entry point
-├── schemas/
-│   └── common-definitions.json        # Platform meta-schema
-├── steps/
-│   ├── http-request/                  # Action step example
-│   ├── script-executor/               # Task step example
-│   └── subworkflow-trigger/           # Trigger step example
-├── sdk-python/
-│   └── syntara_sdk/                   # Python SDK & base classes
-├── docs/
-│   └── architecture.md                # Technical specification
-├── tests/                             # Integration tests
-├── pyproject.toml                     # Python package config
-└── README.md                          # This file
-```
-
-## License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+Generated bindings belong under the language runtime package. A future
+TypeScript SDK generates its own binding from the same canonical proto rather
+than copying Python output.

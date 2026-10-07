@@ -1,16 +1,8 @@
-.PHONY: install test lint typecheck check
+.PHONY: generate-container-protocol
 
-install:
-	uv sync --locked --group dev
-
-test:
-	uv run --no-sync --no-build pytest
-
-lint:
-	uv run --no-sync --no-build pre-commit run ruff --all-files
-
-typecheck:
-	uv run --no-sync --no-build pre-commit run mypy --all-files
-
-check:
-	uv run --no-sync --no-build pre-commit run --all-files
+generate-container-protocol:
+	uv run --active python -m grpc_tools.protoc \
+		--proto_path=contracts/proto \
+		--python_out=sdks/python/packages/runtime/src \
+		--grpc_python_out=sdks/python/packages/runtime/src \
+		contracts/proto/syntara_plugin/runtime/protocol/container.proto

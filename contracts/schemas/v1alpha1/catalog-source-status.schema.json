@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/catalog-source-status.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "status"],
+  "properties": {
+    "apiVersion": {"const": "syntara.io/v1alpha1"},
+    "kind": {"const": "CatalogSourceStatus"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId", "observedAt"],
+      "properties": {
+        "sourceId": {"$ref": "common.schema.json#/$defs/identifier"},
+        "observedAt": {"$ref": "common.schema.json#/$defs/rfc3339Timestamp"}
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "accepted"}}},
+          "then": {"required": ["acceptedGeneration", "acceptedIndexDigest"]}
+        },
+        {
+          "if": {"properties": {"state": {"const": "rejected"}}},
+          "then": {"required": ["reasonCode"]}
+        }
+      ],
+      "properties": {
+        "state": {"enum": ["accepted", "rejected", "stale"]},
+        "acceptedGeneration": {"type": "integer", "minimum": 1},
+        "acceptedIndexDigest": {"$ref": "common.schema.json#/$defs/sha256Digest"},
+        "reasonCode": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,127}$"}
+      }
+    }
+  }
+}

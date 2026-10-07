@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/catalog-source.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "syntara.io/v1alpha1"},
+    "kind": {"const": "CatalogSource"},
+    "metadata": {"$ref": "common.schema.json#/$defs/targetMetadata"},
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId", "registryOrigin", "indexRepository", "channel", "repositoryScopes", "credentialRef", "trustPolicyRef", "reconciliationIntervalSeconds"],
+      "properties": {
+        "sourceId": {"$ref": "common.schema.json#/$defs/identifier"},
+        "registryOrigin": {"type": "string", "format": "uri", "pattern": "^https://"},
+        "indexRepository": {"$ref": "common.schema.json#/$defs/repository"},
+        "channel": {"$ref": "common.schema.json#/$defs/identifier"},
+        "repositoryScopes": {"type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/repository"}},
+        "credentialRef": {"$ref": "common.schema.json#/$defs/opaqueReference"},
+        "trustPolicyRef": {"$ref": "common.schema.json#/$defs/opaqueReference"},
+        "customCaRef": {"$ref": "common.schema.json#/$defs/opaqueReference"},
+        "mirrorPolicy": {"enum": ["direct", "digest-preserving"]},
+        "reconciliationIntervalSeconds": {"type": "integer", "minimum": 60, "maximum": 86400}
+      }
+    }
+  }
+}
