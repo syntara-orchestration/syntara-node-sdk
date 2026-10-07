@@ -2,33 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import traceback
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field, ValidationError
 
 from syntara_sdk.context import ExecutionContext
-
-#: Shortest ``redact``-flagged value the echo check will search for. Values
-#: below this length collide with ordinary output too often, and the execution
-#: plane remains the authoritative scrubbing boundary (R5/AC-4).
-MIN_SENSITIVE_MATCH_LENGTH = 4
-
-
-def _iter_strings(value: Any) -> Iterator[str]:
-    """Yield every string leaf in a nested input value."""
-
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _iter_strings(item)
-    elif isinstance(value, (list, tuple, set)):
-        for item in value:
-            yield from _iter_strings(item)
 
 
 class StandardOutputWrapper(BaseModel):
@@ -102,52 +82,6 @@ class BaseStep(ABC, Generic[TInput, TOutput]):
         """
         self.input_model = input_model
         self.output_model = output_model
-        self._redact_fields = self._discover_redact_fields(input_model)
-
-    @staticmethod
-    def _discover_redact_fields(input_model: type[BaseModel]) -> frozenset[str]:
-        """Collect input fields the schema flags for redaction.
-
-        Mirrors the manifest contract: a property is sensitive when it carries
-        ``redact: true``. Declare it with
-        ``Field(json_schema_extra={"redact": True})``.
-        """
-
-        try:
-            schema = input_model.model_json_schema()
-        except Exception:  # noqa: BLE001 - a model that cannot emit a JSON
-            # schema simply has no declarable redact fields; never block init.
-            return frozenset()
-        return frozenset(
-            name
-            for name, prop in (schema.get("properties") or {}).items()
-            if isinstance(prop, dict) and prop.get("redact") is True
-        )
-
-    def _find_echoed_fields(self, inputs: TInput, output: TOutput) -> list[str]:
-        """Return the ``redact``-flagged input fields echoed into ``output``.
-
-        Defense in depth for R5/AC-4. The platform dispatcher and execution
-        plane own scrubbing and remain the authoritative boundary; this only
-        validates that a step does not return its own sensitive input.
-        """
-
-        if not self._redact_fields:
-            return []
-        data = inputs.model_dump()
-        try:
-            rendered = json.dumps(output.model_dump(), default=str)
-        except (TypeError, ValueError):  # pragma: no cover - defensive
-            rendered = str(output)
-        echoed = [
-            field
-            for field in sorted(self._redact_fields)
-            if any(
-                len(text) >= MIN_SENSITIVE_MATCH_LENGTH and text in rendered
-                for text in _iter_strings(data.get(field))
-            )
-        ]
-        return echoed
 
     @abstractmethod
     def run(self, inputs: TInput, context: ExecutionContext) -> TOutput:
@@ -213,20 +147,6 @@ class BaseStep(ABC, Generic[TInput, TOutput]):
             # Validate output
             if not isinstance(output, self.output_model):
                 output = self.output_model.model_validate(output)
-
-            # R5/AC-4: refuse to emit an output echoing a sensitive input.
-            echoed = self._find_echoed_fields(inputs, output)
-            if echoed:
-                return StandardOutputWrapper(
-                    Result=None,
-                    StatusCode=1,
-                    StatusMessage="Sensitive input echoed in output",
-                    ErrorMessage=(
-                        "Step output contains the value of redact-flagged "
-                        f"input(s): {', '.join(echoed)}. Sensitive inputs must "
-                        "not be returned in step results."
-                    ),
-                )
 
             # Wrap in StandardOutputWrapper
             result = StandardOutputWrapper(

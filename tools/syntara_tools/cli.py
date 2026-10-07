@@ -151,8 +151,7 @@ def init_step(
             # This is a local development command, not the production
             # step-side gRPC server command. Workload-image authors replace
             # it with the language SDK's gRPC server configuration for EP use.
-            # A bare `python main.py` would bypass input validation and the
-            # redact echo check.
+            # A bare `python main.py` would bypass input validation.
             f'CMD ["python", "-m", "syntara_sdk.runner", "--entrypoint", "{entrypoint}"]\n'
         )
 

@@ -364,7 +364,7 @@
         },
         "ErrorMessage": {
           "type": "string",
-          "description": "Detailed error diagnostics populated only on failure (StatusCode > 0). Should include stack traces, validation errors, or API error responses to aid debugging. Credential redaction and persistence are execution-plane responsibilities.",
+          "description": "Detailed error diagnostics populated only on failure (StatusCode > 0). Should include stack traces, validation errors, or API error responses to aid debugging. Credential scrubbing and persistence are platform responsibilities.",
           "default": "",
           "maxLength": 10000
         }
@@ -715,14 +715,7 @@
     "InputParameter": {
       "type": "object",
       "title": "Input Parameter Definition",
-      "description": "A JSON Schema Draft-07 definition for one step input. Non-credential sensitive data (PII, business-sensitive fields) must set redact: true. Authentication credentials must NOT be declared as inputs at all -- use credentialSpecification.credential_references instead. The platform and execution plane use this flag to scrub flagged values from all observable paths.",
-      "properties": {
-        "redact": {
-          "type": "boolean",
-          "description": "Marks a non-credential sensitive input (PII, business-sensitive data) for redaction. The value is still supplied to the step as a normal input, but the platform must keep it out of StandardOutputWrapper fields, workflow variables, error messages, stack traces, execution logs, and persisted state. Do not use this to pass authentication credentials; those must be platform-managed references.",
-          "default": false
-        }
-      },
+      "description": "A JSON Schema Draft-07 definition for one step input. Authentication credentials must NOT be declared as inputs; declare named requirements through credentialSpecification.credential_requirements instead.",
       "additionalProperties": true
     },
     "StepRegistrationPolicy": {
@@ -762,7 +755,7 @@
     "StepInputs": {
       "type": "object",
       "title": "Step Inputs",
-      "description": "Draft-07 sub-schema describing a step's typed input properties, rendered as canvas form fields. Supports flat primitives, dynamic nested JSON/YAML objects (such as arbitrary key/value maps or host lists), oneOf/anyOf unions, and typed arrays. Each sensitive non-credential input property must explicitly set redact: true. 'properties' maps each input name to its JSON Schema; 'required' lists the mandatory input names.",
+      "description": "Draft-07 sub-schema describing a step's typed input properties, rendered as canvas form fields. Supports flat primitives, dynamic nested JSON/YAML objects (such as arbitrary key/value maps or host lists), oneOf/anyOf unions, and typed arrays. 'properties' maps each input name to its JSON Schema; 'required' lists the mandatory input names.",
       "properties": {
         "properties": {
           "type": "object",

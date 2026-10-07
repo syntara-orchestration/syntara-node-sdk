@@ -78,8 +78,7 @@ in plugin records or stores separate step records.
    step contracts it contains. Steps have no independent version; changing any contained step
    requires a new plugin version. Version does not change the derived canonical step identity.
 6. **Zero-trust credentials.** Authentication credentials are platform-managed references
-   (UUIDs), never step inputs. Non-credential sensitive data may be an input flagged
-   `redact: true`, which the platform must keep out of every observable path.
+   (UUIDs), never step inputs.
 7. **Immutable output envelope.** `StandardOutputWrapper` (`Result`, `StatusCode`,
    `StatusMessage`, `ErrorMessage`) never changes shape, so template expressions such as
    `${task.Result}` survive plugin upgrades.
@@ -237,10 +236,6 @@ spec:
       url:
         type: string
         description: Target HTTP/HTTPS URL
-      customer_email:
-        type: string
-        description: Customer email used for the lookup; sensitive, not a credential
-        redact: true
       method:
         type: string
         enum: [GET, POST, PUT, DELETE, PATCH]
@@ -539,7 +534,7 @@ graph LR
 | `image_ref` | The registered plugin metadata-artifact reference from which the declarative descriptor was extracted. It is used for discovery and registration, not execution. |
 | `execution.image` | The workload OCI image containing executable step code, dependencies, and a step-side gRPC server/runtime. |
 | `execution.entrypoint` | Optional `module:Class` handle for future control-plane loading from the workload image; it is not sent to or required by the gRPC path, and its presence does not select placement. |
-| Abstract task invocation | Script, `inputs` (including `redact`-flagged values), credentials resolved from the workflow's credential bindings, and `workflow_context`. |
+| Abstract task invocation | Script, `inputs`, credentials resolved from the workflow's credential bindings, and `workflow_context`. |
 | Selection metadata | `declaredRequirements`, `resourceRequirements`, `executionTimeout` — enough for the platform to validate and route. |
 | Registration controls | Administrator-owned `sandbox_required`, `egress_policy`, `worker_pool_selector`. |
 
@@ -610,19 +605,9 @@ Binding at workflow-authoring time is what lets two steps of the same type use d
 credentials — two `http_request` steps hitting two APIs — which a step-type-level or
 registration-level binding could not express.
 
-**Non-credential sensitive data** — PII, business-sensitive fields — *is* a normal input,
-flagged `redact: true`. The step receives the value because it needs it; the flag governs where
-that value is allowed to appear afterwards.
-
-| | Authentication credentials | Sensitive non-credential data |
-|---|---|---|
-| Declared as | a named `credential_requirements` entry | an input with `redact: true` |
-| Reaches the step | resolved out of band by the execution plane | in the `inputs` map |
-| In the step descriptor | the requirement only — never a UUID or value | schema flag only, never a value |
-
 ### The Non-Disclosure Guarantee
 
-Neither a credential value nor a `redact`-flagged input value may appear in:
+A credential value may not appear in:
 
 - `StandardOutputWrapper` fields (`Result`, `StatusMessage`, `ErrorMessage`)
 - workflow variables and template expression results
@@ -634,14 +619,6 @@ The platform dispatcher and execution plane enforce this across every observable
 invocation, output, error, and logging — and are the **authoritative security boundary**. The
 SDK does not define the scrubbing implementation.
 
-### SDK-Side Echo Check
-
-As defense in depth, SDK base classes validate that a step implementation does not echo a
-`redact`-flagged input value into its output. This catches the common authoring mistake of
-returning a sensitive input in a result payload. It is a secondary check: it runs inside the
-step process, sees only that step's own inputs and outputs, and does not relieve the platform
-of the guarantee above.
-
 **Authorization is the platform's.** Nothing in the SDK constrains *which* credentials a step
 may request. A step declares the references it intends to use; the platform decides whether the
 request is permitted at dispatch time, based on the invoking actor's permissions and the
@@ -652,7 +629,7 @@ credential's own access policy.
 Three parties, three responsibilities:
 
 1. **The step declares.** `manifest.yaml` supplies category, execution metadata, input/output
-   schemas, `redact` markers, `resourceRequirements`, `credentialSpecification`, and
+   schemas, `resourceRequirements`, `credentialSpecification`, and
    `declaredRequirements`. `capabilities: [network-egress]` says the step needs outbound
    connectivity; it does not grant it.
 2. **Administrators decide.** `sandbox_required`, `egress_policy`, and `worker_pool_selector`
@@ -706,7 +683,7 @@ descriptors rather than the source manifest.
 | `Author` / `Authors` | Attribution | author name is required; email and URL are optional; plugin authors are required while step authors are optional |
 | `StepCategory` | Four-category taxonomy | `enum: ["action", "task", "workflow", "trigger"]` |
 | `StepInputs` | Draft-07 input object | `{properties, required}` |
-| `InputParameter` | One input, including sensitivity | `redact: true` |
+| `InputParameter` | One input | JSON Schema property |
 | `StandardOutputWrapper` | Immutable output contract | `{Result, StatusCode, StatusMessage, ErrorMessage}` |
 | `CredentialSpecification` | Step credential requirements | `{credential_requirements}` |
 | `CredentialRequirement` / `CredentialRequirementList` | Named credential requirement; no UUID | `{name, types, required, mount_type, mount_path, header_name}` |

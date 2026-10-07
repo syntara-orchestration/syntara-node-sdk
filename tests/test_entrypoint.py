@@ -181,7 +181,7 @@ def test_scaffolded_containerfile_has_a_safe_local_development_runner(tmp_path: 
     assert "FROM docker.io/library/python" in containerfile
     assert "syntara_sdk.runner" in containerfile
     assert entrypoint in containerfile
-    # A bare script invocation would bypass validation and the redact check.
+    # A bare script invocation would bypass validation.
     assert 'CMD ["python", "/app/main.py"]' not in containerfile
 
 

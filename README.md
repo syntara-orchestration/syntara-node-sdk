@@ -9,7 +9,7 @@ A schema-driven framework for authoring, packaging, and registering custom autom
 ## Features
 
 - **🎯 Type-Safe Authoring** — Author steps in human-friendly YAML with JSON Schema validation (Draft-07)
-- **🔒 Zero-Trust Security** — Authentication credentials are platform-managed UUID references, never step inputs; non-credential sensitive data is flagged `redact: true` and kept out of outputs, logs, and persisted state
+- **🔒 Zero-Trust Security** — Authentication credentials are platform-managed UUID references, never step inputs, and are kept out of outputs, logs, and persisted state
 - **📦 Four-Category Taxonomy** — `action` (integrations), `task` (compute), `workflow` (control flow), `trigger` (events)
 - **⚡ Fast Canvas Rendering** — Compiled step definitions enable <500ms dynamic form rendering
 - **🔌 Kubernetes-Native** — Follows K8s CRD conventions (`apiVersion`, `kind`, `metadata`, `spec`)
@@ -261,7 +261,7 @@ spec:
         mount_path: /tmp/api-key
 ```
 
-Non-credential sensitive data (PII, business-sensitive fields) *is* supplied as a normal input, flagged `redact: true`. Neither a credential value nor a `redact`-flagged value may appear in `StandardOutputWrapper` fields, workflow variables, error messages, stack traces, execution logs, or persisted state. The platform dispatcher and execution plane enforce this and are the authoritative security boundary; SDK base classes additionally check that a step does not echo a flagged input into its output.
+Credential values may not appear in `StandardOutputWrapper` fields, workflow variables, error messages, stack traces, execution logs, or persisted state. The platform dispatcher and execution plane enforce this and are the authoritative security boundary.
 
 ### Declarative Permissions
 

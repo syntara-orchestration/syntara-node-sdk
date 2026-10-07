@@ -235,9 +235,7 @@ class ScriptExecutorInput(BaseModel):
     script: str = Field(min_length=1, max_length=1_048_576)
     language: Literal["python3", "bash"] = "python3"
     arguments: dict[str, Any] | list[str] | None = None
-    environment_variables: dict[str, str] | None = Field(
-        default=None, json_schema_extra={"redact": True}
-    )
+    environment_variables: dict[str, str] | None = Field(default=None)
     working_directory: str = "/workspace"
 
 
