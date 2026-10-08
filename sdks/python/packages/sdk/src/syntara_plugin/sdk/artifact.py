@@ -26,7 +26,7 @@ OCI_CONFIG_MEDIA_TYPE = "application/vnd.syntara.plugin.config.v1+json"
 OCI_PLUGIN_MANIFEST_MEDIA_TYPE = "application/vnd.syntara.plugin.manifest.v1+yaml"
 OCI_CONTENT_BUNDLE_MEDIA_TYPE = "application/vnd.syntara.plugin.content.v1.tar+gzip"
 
-_SCHEMA_SOURCE_FIELDS = frozenset({"configuration", "error", "input", "output"})
+_SCHEMA_SOURCE_FIELDS = frozenset({"configuration", "credentialSchema", "error", "input", "output"})
 _HTTP_MAPPING_SOURCE_FIELDS = frozenset(
     {"runtime/operation/requestMap", "runtime/operation/responseMap"}
 )

@@ -21,6 +21,7 @@ from syntara_plugin.sdk import (
     build_plugin_artifact,
     compile_workspace,
 )
+from syntara_plugin.sdk.artifact import _reference_media_type
 
 
 DIGEST = "quay.io/acme/issue-tools@sha256:" + "a" * 64
@@ -182,3 +183,14 @@ def test_artifact_builder_rejects_markdown_as_a_schema_asset(tmp_path: Path) -> 
 
     with pytest.raises(ArtifactBuildError, match="non-schema media type"):
         build_plugin_artifact(invalid)
+
+
+def test_artifact_builder_accepts_credential_schema_asset_references() -> None:
+    """Credential schemas are valid typed schema assets in an OCI artifact."""
+    assert (
+        _reference_media_type(
+            "schemas/github-service-token.credential.yaml",
+            "credentials/github-service-token.yaml#/spec/credentialSchema",
+        )
+        == "application/schema+yaml"
+    )
