@@ -18,6 +18,7 @@ from syntara_tools.compiler import (
     discover_plugin,
     load_manifest,
     validate_manifest,
+    validate_plugin_manifest,
 )
 from syntara_tools.oci_client import (
     OCI_ARTIFACT_TYPE,
@@ -30,9 +31,8 @@ from syntara_tools.oci_client import (
 _STEP_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-def _manifest(name: str, tier: int, image: str) -> dict[str, Any]:
+def _manifest(name: str, tier: int) -> dict[str, Any]:
     step_class = _step_class_name(name)
-    execution: dict[str, Any] = {"image": image, "entrypoint": f"main:{step_class}"}
     return {
         "apiVersion": "syntara.io/v1alpha1",
         "kind": "StepType",
@@ -46,7 +46,7 @@ def _manifest(name: str, tier: int, image: str) -> dict[str, Any]:
         },
         "spec": {
             "category": "task",
-            "execution": execution,
+            "execution": {"entrypoint": f"steps.{name}.main:{step_class}"},
             "inputs": {"type": "object", "properties": {}, "required": []},
             "outputs": {
                 "allOf": [
@@ -60,16 +60,36 @@ def _manifest(name: str, tier: int, image: str) -> dict[str, Any]:
     }
 
 
+def _plugin_manifest(name: str, namespace: str, image: str) -> dict[str, Any]:
+    """Return the root manifest owning the one plugin runtime image."""
+    return {
+        "apiVersion": "syntara.io/v1alpha1",
+        "kind": "Plugin",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "displayName": name.replace("_", " ").title(),
+            "version": "0.1.0",
+            "description": f"Custom plugin containing the {name} step.",
+            "authors": [{"name": "Plugin Author"}],
+        },
+        "spec": {
+            "targets": [f"steps/{name}/manifest.yaml"],
+            "runtime": {"image": image},
+        },
+    }
+
+
 def _step_class_name(name: str) -> str:
-    """Derive the BaseStep subclass name the entrypoint will reference."""
+    """Derive the BaseStep subclass name used by the plugin registration."""
 
     return "".join(part.title() for part in name.split("_")) + "Step"
 
 
 def _step_module(class_name: str) -> str:
-    """Scaffold a BaseStep subclass matching the declared entrypoint."""
+    """Scaffold a BaseStep subclass for plugin-level registration."""
 
-    return f'''"""Step implementation. Loaded by the runtime via spec.execution.entrypoint."""
+    return f'''"""Step implementation registered by this plugin's runtime."""
 
 from pydantic import BaseModel
 
@@ -95,6 +115,22 @@ class {class_name}(TaskStep[{class_name}Input, {class_name}Output]):
 '''
 
 
+def _runtime_module(namespace: str, plugin_name: str, step_name: str, class_name: str) -> str:
+    """Generate the one image-level registration point for a scaffolded plugin."""
+    identity = f"{namespace}/{plugin_name}/{step_name}"
+    return f'''"""Plugin-level runtime registration for every bundled step."""
+
+from syntara_sdk import PluginRuntime
+from steps.{step_name}.main import {class_name}
+
+
+def create_runtime() -> PluginRuntime:
+    runtime = PluginRuntime("{namespace}/{plugin_name}")
+    runtime.register("{identity}", {class_name})
+    return runtime
+'''
+
+
 def _resolve_within(candidate: Path, base: Path) -> Path:
     """Resolve ``candidate`` and refuse to escape ``base``.
 
@@ -117,8 +153,13 @@ def init_step(
     tier: int,
     image: str | None,
     base_dir: Path | None = None,
+    namespace: str = "syntara",
 ) -> None:
-    """Create a Tier 2 script package or Tier 3 image package."""
+    """Create a plugin root with one registered initial step.
+
+    The generated root owns one runtime image and one dispatcher. Additional
+    steps belong under ``steps/`` and register in ``plugin_runtime.py``.
+    """
 
     if not _STEP_NAME.fullmatch(name):
         raise ValueError("name must be lowercase snake_case")
@@ -128,31 +169,38 @@ def init_step(
     if path.exists() and any(path.iterdir()):
         raise FileExistsError(f"target directory is not empty: {path}")
 
+    if not _STEP_NAME.fullmatch(namespace):
+        raise ValueError("namespace must be lowercase snake_case")
     resolved_image = image or f"quay.io/example/{name}@sha256:" + "0" * 64
-    manifest = _manifest(name, tier, resolved_image)
+    manifest = _manifest(name, tier)
     errors = validate_manifest(manifest)
     if errors:
         raise ValueError("generated manifest is invalid:\n" + "\n".join(errors))
+    plugin_manifest = _plugin_manifest(name, namespace, resolved_image)
+    plugin_errors = validate_plugin_manifest(plugin_manifest)
+    if plugin_errors:
+        raise ValueError("generated plugin runtime is invalid:\n" + "\n".join(plugin_errors))
     path.mkdir(parents=True, exist_ok=True)
-    (path / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
-
-    # The generated source exposes an optional control-plane loading handle.
-    # Every workload image also carries the step-side gRPC contract; placement
-    # is selected by platform policy.
-    (path / "main.py").write_text(_step_module(_step_class_name(name)))
+    step_dir = path / "steps" / name
+    step_dir.mkdir(parents=True)
+    (path / "plugin.yaml").write_text(
+        yaml.safe_dump(plugin_manifest, sort_keys=False)
+    )
+    (path / "steps" / "__init__.py").write_text("")
+    (step_dir / "__init__.py").write_text("")
+    (step_dir / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+    (step_dir / "main.py").write_text(_step_module(_step_class_name(name)))
+    (path / "plugin_runtime.py").write_text(
+        _runtime_module(namespace, name, name, _step_class_name(name))
+    )
     if tier == 3:
-        entrypoint = manifest["spec"]["execution"]["entrypoint"]
         (path / "Containerfile").write_text(
             "FROM docker.io/library/python:3.12-slim\n"
             "RUN pip install --no-cache-dir syntara-sdk\n"
-            "COPY main.py /app/main.py\n"
+            "COPY . /app\n"
             "WORKDIR /app\n"
             "USER 1000:1000\n"
-            # This is a local development command, not the production
-            # step-side gRPC server command. Workload-image authors replace
-            # it with the language SDK's gRPC server configuration for EP use.
-            # A bare `python main.py` would bypass input validation.
-            f'CMD ["python", "-m", "syntara_sdk.runner", "--entrypoint", "{entrypoint}"]\n'
+            'CMD ["python", "-m", "syntara_sdk.runner", "--runtime-module", "plugin_runtime"]\n'
         )
 
 
@@ -160,7 +208,7 @@ def _oci_manifest(plugin_path: Path, image_ref: str) -> tuple[dict[str, Any], by
     """Return an OCI manifest and its plugin metadata layer contents."""
 
     # The artifact ref is where the plugin is published. It is unrelated to
-    # spec.execution.image, which names the runtime the step executes in.
+    # plugin.spec.runtime.image, which names the runtime for every step.
     if not isinstance(image_ref, str) or not image_ref:
         raise ValueError("publishing requires an artifact reference (--registry)")
     parse_image_reference(image_ref)
@@ -321,6 +369,7 @@ def main(argv: list[str] | None = None) -> int:
     init_parser.add_argument("--tier", type=int, choices=[2, 3], required=True)
     init_parser.add_argument("--path", type=Path, default=None)
     init_parser.add_argument("--image")
+    init_parser.add_argument("--namespace", default="syntara")
 
     validate_parser = subparsers.add_parser(
         "validate", help="validate a standalone manifest.yaml or root plugin.yaml"
@@ -358,6 +407,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.name,
                 args.tier,
                 args.image,
+                namespace=args.namespace,
             )
             return 0
         if args.command == "validate":

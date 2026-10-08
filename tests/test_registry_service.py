@@ -38,9 +38,7 @@ def test_register_manifest_persists_dispatch_columns(session: Session) -> None:
 
     assert row.category == "trigger"
     assert row.image_ref is None
-    assert row.descriptor["spec"]["execution"]["image"].startswith(
-        "quay.io/syntara/platform-trigger@sha256:"
-    )
+    assert row.descriptor["spec"]["execution"] == {"entrypoint": "main:SubworkflowTriggerStep"}
 
 
 def test_register_manifest_payload_accepts_raw_yaml(session: Session) -> None:

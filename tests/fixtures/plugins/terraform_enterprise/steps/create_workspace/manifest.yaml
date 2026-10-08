@@ -9,7 +9,7 @@ metadata:
 spec:
   category: action
   execution:
-    image: quay.io/syntara/terraform-enterprise@sha256:5555555555555555555555555555555555555555555555555555555555555555
+    entrypoint: steps.create_workspace.main:CreateWorkspaceStep
   inputs:
     type: object
     properties: {}

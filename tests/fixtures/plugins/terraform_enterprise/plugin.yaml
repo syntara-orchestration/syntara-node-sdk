@@ -18,6 +18,5 @@ spec:
   targets:
     - ./steps/create_workspace/manifest.yaml
     - ./steps/list_workspaces/manifest.yaml
-  images:
-    - repository: quay.io/syntara/terraform-enterprise
-      digest: sha256:5555555555555555555555555555555555555555555555555555555555555555
+  runtime:
+    image: quay.io/syntara/terraform-enterprise@sha256:5555555555555555555555555555555555555555555555555555555555555555

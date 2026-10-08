@@ -7,15 +7,26 @@ from syntara_tools.cli import build_plugin, init_step, main
 from syntara_tools.oci_client import OCI_ARTIFACT_TYPE, OCI_PLUGIN_MANIFEST_MEDIA_TYPE
 
 
-def test_init_tier_two_creates_script_package(tmp_path: Path) -> None:
+def test_init_creates_a_plugin_root_with_one_registered_step(tmp_path: Path) -> None:
     target = tmp_path / "normalize_payload"
     init_step(target, "normalize_payload", 2, None, base_dir=tmp_path)
-    assert (target / "main.py").exists()
-    assert (target / "manifest.yaml").exists()
-    manifest = yaml.safe_load((target / "manifest.yaml").read_text())
+    assert (target / "plugin_runtime.py").exists()
+    assert (target / "steps" / "normalize_payload" / "main.py").exists()
+    assert (target / "steps" / "normalize_payload" / "manifest.yaml").exists()
+    source = (target / "steps" / "normalize_payload" / "main.py").read_text()
+    compile(source, str(target / "steps" / "normalize_payload" / "main.py"), "exec")
+    runtime_source = (target / "plugin_runtime.py").read_text()
+    compile(runtime_source, str(target / "plugin_runtime.py"), "exec")
+    manifest = yaml.safe_load((target / "steps" / "normalize_payload" / "manifest.yaml").read_text())
     assert "version" not in manifest["metadata"]
     assert "namespace" not in manifest["metadata"]
     assert manifest["metadata"]["tags"] == []
+    assert manifest["spec"]["execution"]["entrypoint"] == (
+        "steps.normalize_payload.main:NormalizePayloadStep"
+    )
+    plugin = yaml.safe_load((target / "plugin.yaml").read_text())
+    assert plugin["spec"]["runtime"]["image"].endswith("@sha256:" + "0" * 64)
+    assert plugin["spec"]["targets"] == ["steps/normalize_payload/manifest.yaml"]
 
 
 def test_init_tier_three_creates_dedicated_package(tmp_path: Path) -> None:
@@ -24,11 +35,14 @@ def test_init_tier_three_creates_dedicated_package(tmp_path: Path) -> None:
         target, "custom_step", 3, "quay.io/example/custom-step@sha256:" + "a" * 64, base_dir=tmp_path
     )
     assert (target / "Containerfile").exists()
-    assert (target / "manifest.yaml").exists()
+    assert (target / "plugin.yaml").exists()
+    containerfile = (target / "Containerfile").read_text()
+    assert '"--runtime-module", "plugin_runtime"' in containerfile
+    assert 'CMD ["python", "/app/main.py"]' not in containerfile
 
 
-def test_init_rejects_mutable_workload_image(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="execution/image"):
+def test_init_rejects_mutable_plugin_runtime_image(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="runtime/image"):
         init_step(tmp_path / "custom_step", "custom_step", 3, "quay.io/example/custom-step:1.0.0", base_dir=tmp_path)
 
 
@@ -39,25 +53,7 @@ RUNTIME_IMAGE = "quay.io/example/custom-step@sha256:" + "a" * 64
 def _plugin_source(tmp_path: Path) -> Path:
     source = tmp_path / "custom_step"
     init_step(source, "custom_step", 3, "quay.io/example/custom-step@sha256:" + "a" * 64, base_dir=tmp_path)
-    plugin = {
-        "apiVersion": "syntara.io/v1alpha1",
-        "kind": "Plugin",
-        "metadata": {
-            "name": "custom_plugin",
-            "namespace": "example",
-            "displayName": "Custom Plugin",
-            "version": "1.0.0",
-            "description": "A test plugin.",
-            "authors": [{"name": "Example"}],
-        },
-        "spec": {
-            "targets": ["custom_step/manifest.yaml"],
-            "images": [{"repository": "quay.io/example/custom-step", "digest": "sha256:" + "a" * 64}],
-        },
-    }
-    path = tmp_path / "plugin.yaml"
-    path.write_text(yaml.safe_dump(plugin), encoding="utf-8")
-    return path
+    return source / "plugin.yaml"
 
 
 def test_build_writes_oci_manifest_with_plugin_layer(tmp_path: Path) -> None:
@@ -78,7 +74,7 @@ def test_build_writes_oci_manifest_with_plugin_layer(tmp_path: Path) -> None:
     payload = yaml.safe_load(
         (output / "blobs" / "sha256" / layer["digest"].removeprefix("sha256:")).read_text()
     )
-    assert payload["plugin"]["metadata"]["name"] == "custom_plugin"
+    assert payload["plugin"]["metadata"]["name"] == "custom_step"
     assert len(payload["steps"]) == 1
     assert payload["steps"][0]["contentDigest"].startswith("sha256:")
 
@@ -98,12 +94,12 @@ def test_artifact_ref_does_not_overwrite_runtime_image(tmp_path: Path) -> None:
 
     # Published-to location is the artifact ref...
     assert artifact["annotations"]["org.opencontainers.image.ref.name"] == ARTIFACT_REF
-    # ...while the embedded manifest still names the runtime the step runs in.
+    # ...while the embedded root manifest still names the plugin runtime image.
     layer = artifact["layers"][0]
     embedded = yaml.safe_load(
         (output / "blobs" / "sha256" / layer["digest"].removeprefix("sha256:")).read_text()
     )
-    assert embedded["steps"][0]["manifest"]["spec"]["execution"]["image"].startswith(
+    assert embedded["plugin"]["spec"]["runtime"]["image"].startswith(
         "quay.io/example/custom-step@sha256:"
     )
 
@@ -150,39 +146,13 @@ def test_init_rejects_absolute_path_outside_base(tmp_path: Path) -> None:
 def test_init_still_allows_a_nested_in_tree_path(tmp_path: Path) -> None:
     init_step(Path("plugins/custom_step"), "custom_step", 3, RUNTIME_IMAGE, base_dir=tmp_path)
 
-    assert (tmp_path / "plugins" / "custom_step" / "manifest.yaml").exists()
+    assert (tmp_path / "plugins" / "custom_step" / "plugin.yaml").exists()
 
 
 def test_validate_detects_step_and_plugin_resources(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     step_path = tmp_path / "step"
     init_step(step_path, "step", 3, RUNTIME_IMAGE, base_dir=tmp_path)
-    assert main(["validate", str(step_path / "manifest.yaml")]) == 0
+    assert main(["validate", str(step_path / "steps" / "step" / "manifest.yaml")]) == 0
     assert "validated step manifest" in capsys.readouterr().out
-
-    step = yaml.safe_load((step_path / "manifest.yaml").read_text())
-    step["spec"]["execution"] = {
-        "image": "quay.io/example/custom-step@sha256:" + "a" * 64,
-        "entrypoint": None,
-    }
-    (step_path / "manifest.yaml").write_text(yaml.safe_dump(step), encoding="utf-8")
-    plugin = {
-        "apiVersion": "syntara.io/v1alpha1",
-        "kind": "Plugin",
-        "metadata": {
-            "name": "sample",
-            "namespace": "syntara",
-            "displayName": "Sample",
-            "version": "0.1.0",
-            "description": "Sample plugin.",
-            "authors": [{"name": "Example"}],
-        },
-        "spec": {
-            "targets": ["step/manifest.yaml"],
-            "images": [
-                {"repository": "quay.io/example/custom-step", "digest": "sha256:" + "a" * 64}
-            ],
-        },
-    }
-    (tmp_path / "plugin.yaml").write_text(yaml.safe_dump(plugin), encoding="utf-8")
-    assert main(["validate", str(tmp_path / "plugin.yaml")]) == 0
+    assert main(["validate", str(step_path / "plugin.yaml")]) == 0
     assert "validated plugin with 1 step" in capsys.readouterr().out

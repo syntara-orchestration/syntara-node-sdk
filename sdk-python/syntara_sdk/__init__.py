@@ -11,6 +11,14 @@ from syntara_sdk.credentials import (
     CredentialMountType,
     CredentialRequirement,
 )
+from syntara_sdk.runtime import (
+    InvocationContext,
+    PluginRuntime,
+    QualifiedStepIdentity,
+    RuntimeRegistrationError,
+    StepInvocation,
+    StepInvocationResult,
+)
 from syntara_sdk.step import (
     ActionStep,
     BaseStep,
@@ -30,7 +38,13 @@ __all__ = [
     "CredentialMountType",
     "CredentialRequirement",
     "ExecutionContext",
+    "InvocationContext",
+    "PluginRuntime",
+    "QualifiedStepIdentity",
+    "RuntimeRegistrationError",
     "StandardOutputWrapper",
+    "StepInvocation",
+    "StepInvocationResult",
     "TaskStep",
     "TriggerStep",
     "WorkflowStep",

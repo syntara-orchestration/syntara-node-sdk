@@ -52,10 +52,8 @@ def _plugin_source(tmp_path: Path, name: str) -> Path:
             "authors": [{"name": "Example"}],
         },
         "spec": {
-            "targets": [f"{name}/manifest.yaml"],
-            "images": [
-                {"repository": f"localhost:5000/syntara/runtimes/{name}", "digest": "sha256:" + "b" * 64}
-            ],
+            "targets": [f"{name}/steps/{name}/manifest.yaml"],
+            "runtime": {"image": image},
         },
     }
     path = tmp_path / "plugin.yaml"
@@ -112,7 +110,7 @@ def test_inspect_rejects_invalid_embedded_plugin_metadata(tmp_path: Path, mutati
     payload = {"plugin": descriptor.manifest, "steps": [step.indexed_data() for step in descriptor.steps]}
     step = payload["steps"][0]
     if mutation == "invalid-step":
-        del step["manifest"]["spec"]["execution"]["image"]
+        step["manifest"]["spec"]["execution"] = {"image": "invalid"}
     elif mutation == "wrong-identity":
         step["identity"] = "other/plugin/step"
     else:

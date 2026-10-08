@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "common-definitions.json",
   "title": "Syntara Plugin SDK - Common Definitions",
-  "description": "Shared reusable definitions for the Syntara Automation Orchestrator Plugin SDK. These components are referenced across all step types to ensure strict backwards compatibility and consistent runtime behavior.",
+  "description": "Shared reusable definitions for the Syntara Plugin SDK.",
   "definitions": {
     "Author": {
       "type": "object",
@@ -43,21 +43,20 @@
       "minLength": 1,
       "pattern": "^(?![A-Za-z][A-Za-z0-9+.-]*:)(?![\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+\\.ya?ml$"
     },
-    "PluginImage": {
+    "PluginRuntime": {
       "type": "object",
-      "description": "An immutable workload image used by one or more targeted steps.",
+      "description": "The one immutable runtime image that dispatches every step in this plugin.",
       "properties": {
-        "repository": {
+        "image": {
           "type": "string",
-          "minLength": 1,
-          "pattern": "^[^@\\s]+$"
-        },
-        "digest": {
-          "type": "string",
-          "pattern": "^sha256:[a-f0-9]{64}$"
+          "description": "Digest-pinned OCI runtime image containing the plugin dispatcher and all step implementations.",
+          "pattern": "^(?:[a-zA-Z0-9][a-zA-Z0-9.-]*(?::[0-9]+)?/)?[a-zA-Z0-9][a-zA-Z0-9._/-]*@sha256:[a-f0-9]{64}$",
+          "examples": [
+            "quay.io/example/example-plugin@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ]
         }
       },
-      "required": ["repository", "digest"],
+      "required": ["image"],
       "additionalProperties": false
     },
     "PluginManifest": {
@@ -77,15 +76,9 @@
               "uniqueItems": true,
               "items": {"$ref": "#/definitions/PluginTarget"}
             },
-            "images": {
-              "type": "array",
-              "description": "Explicit non-empty immutable inventory for workload images referenced by targeted steps.",
-              "minItems": 1,
-              "items": {"$ref": "#/definitions/PluginImage"},
-              "uniqueItems": true
-            }
+            "runtime": {"$ref": "#/definitions/PluginRuntime"}
           },
-          "required": ["targets", "images"],
+          "required": ["targets", "runtime"],
           "additionalProperties": false
         }
       },
@@ -188,38 +181,26 @@
         },
         "spec": {
           "type": "object",
-          "description": "Step specification defining category, execution, inputs, outputs, and requirements.",
+          "description": "Step specification defining category, schemas, and requirements. The plugin root selects the runtime image.",
           "properties": {
             "category": {
               "$ref": "#/definitions/StepCategory"
             },
             "execution": {
               "type": "object",
-              "description": "Declarative workload and optional control-plane loading information; placement is selected by platform policy, not this manifest.",
+              "description": "The step implementation handle. It identifies this step's code independently of whether platform policy runs it in the control plane or through the plugin runtime image.",
               "properties": {
-                "image": {
-                  "type": "string",
-                  "description": "Required immutable workload OCI image containing this step's implementation, dependencies, and step-side gRPC server/runtime. It must be pinned by sha256 digest and names the workload regardless of control-plane or execution-plane placement; policy selects placement.",
-                  "pattern": "^(?:[a-zA-Z0-9][a-zA-Z0-9.-]*(?::[0-9]+)?/)?[a-zA-Z0-9][a-zA-Z0-9._/-]*@sha256:[a-f0-9]{64}$",
-                  "examples": [
-                    "quay.io/syntara/script-python-executor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "localhost:5000/syntara/runners/node22@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                  ]
-                },
                 "entrypoint": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "description": "Optional control-plane loading handle in 'module.path:ClassName' form for code resolved from the workload image. It is not the workload container process entrypoint or a shell command, is not used by the step-side gRPC path, and its presence does not select placement. Omit it when direct control-plane loading is not supported.",
+                  "type": "string",
+                  "description": "Python implementation handle in 'module.path:ClassName' form. It is not a container command and does not select execution placement.",
                   "pattern": "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$",
                   "examples": [
-                    "main:HttpRequestStep",
-                    "src.main:GithubIssueStep"
+                    "steps.http_request.main:HttpRequestStep",
+                    "steps.github.create_issue:CreateIssueStep"
                   ]
                 }
               },
-              "required": ["image"],
+              "required": ["entrypoint"],
               "additionalProperties": false
             },
             "declaredRequirements": {
@@ -311,9 +292,9 @@
             }
           },
           "required": [
-            "category",
-            "execution",
-            "inputs",
+        "category",
+        "execution",
+        "inputs",
             "outputs"
           ],
           "additionalProperties": false

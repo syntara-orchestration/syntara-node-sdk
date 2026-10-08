@@ -15,9 +15,7 @@ metadata:
 spec:
   category: task
   execution:
-    image: quay.io/syntara/script-python-executor@sha256:2222222222222222222222222222222222222222222222222222222222222222
     entrypoint: main:ScriptExecutorStep
-
   declaredRequirements:
     capabilities:
       - script-execution

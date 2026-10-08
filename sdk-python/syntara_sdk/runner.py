@@ -1,4 +1,9 @@
-"""Local CLI runner for testing Syntara steps offline."""
+"""A small JSON adapter around the plugin-level runtime dispatcher.
+
+The SDK does not define a network protocol. This is intentionally a stdio
+adapter so an image has one fixed process entrypoint while a future transport
+can use the same ``StepInvocation`` contract directly.
+"""
 
 from __future__ import annotations
 
@@ -7,223 +12,68 @@ import json
 import sys
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from syntara_sdk.context import ExecutionContext
-from syntara_sdk.step import BaseStep
-
-
-def parse_entrypoint(entrypoint: str) -> tuple[str, str]:
-    """Split a manifest ``spec.execution.entrypoint`` into module and class.
-
-    The manifest form is ``module.path:ClassName``, resolving to a step inside
-    the plugin artifact. A plugin may package several steps, so the runtime
-    needs the handle to load the right one. It is deliberately not a shell
-    command: the step must be invoked *through* its base class so that input
-    validation still runs.
-    """
-
-    module_path, separator, class_name = entrypoint.partition(":")
-    if not separator or not module_path or not class_name:
-        raise ValueError(
-            f"entrypoint must be 'module.path:ClassName', got {entrypoint!r}"
-        )
-    return module_path, class_name
+from syntara_sdk.runtime import PluginRuntime
 
 
-def load_step_class(module_path: str, class_name: str) -> type[BaseStep]:
-    """Dynamically load a step class from a Python module.
-
-    Args:
-        module_path: Python module path (e.g., 'examples.http_request.src.main')
-        class_name: Step class name (e.g., 'HttpRequestStep')
-
-    Returns:
-        Step class
-
-    Raises:
-        ImportError: If module or class cannot be loaded
-    """
-    try:
-        module = import_module(module_path)
-    except ImportError as e:
-        raise ImportError(f"Failed to import module '{module_path}': {e}")
-
-    try:
-        step_class = getattr(module, class_name)
-    except AttributeError:
-        raise ImportError(
-            f"Class '{class_name}' not found in module '{module_path}'"
-        )
-
-    if not issubclass(step_class, BaseStep):
-        raise TypeError(
-            f"{class_name} must be a subclass of BaseStep"
-        )
-
-    return step_class
+def load_plugin_runtime(module_path: str) -> PluginRuntime:
+    """Load a plugin runtime from a module exposing ``create_runtime()``."""
+    module = import_module(module_path)
+    factory = getattr(module, "create_runtime", None)
+    if not callable(factory):
+        raise TypeError(f"runtime module {module_path!r} must define create_runtime()")
+    runtime = factory()
+    if not isinstance(runtime, PluginRuntime):
+        raise TypeError("create_runtime() must return PluginRuntime")
+    return runtime
 
 
-def load_inputs_from_file(path: Path) -> dict[str, Any]:
-    """Load inputs from a JSON file.
-
-    Args:
-        path: Path to JSON file
-
-    Returns:
-        Input dictionary
-
-    Raises:
-        FileNotFoundError: If file doesn't exist
-        json.JSONDecodeError: If file is not valid JSON
-    """
-    if not path.exists():
-        raise FileNotFoundError(f"Input file not found: {path}")
-
-    with path.open() as f:
-        return json.load(f)
+def dispatch_json(runtime: PluginRuntime, request: object) -> dict[str, Any]:
+    """Dispatch a decoded request using the transport-neutral contract."""
+    return runtime.dispatch(request).model_dump(mode="json")
 
 
-def run_step_local(
-    step_class: type[BaseStep],
-    inputs: dict[str, Any],
-    execution_id: str | None = None,
-    workflow_id: str | None = None,
-) -> dict[str, Any]:
-    """Execute a step locally with the given inputs.
+def _read_request(args: argparse.Namespace) -> object:
+    if args.request is not None:
+        return cast(object, json.loads(args.request))
+    if args.request_file is not None:
+        return cast(object, json.loads(args.request_file.read_text(encoding="utf-8")))
+    for line in sys.stdin:
+        if line.strip():
+            return cast(object, json.loads(line))
+    raise ValueError("one JSON StepInvocation request is required")
 
-    Args:
-        step_class: Step class to instantiate and run
-        inputs: Input dictionary
-        execution_id: Optional execution ID
-        workflow_id: Optional workflow ID
 
-    Returns:
-        StandardOutputWrapper as dictionary
-    """
-    # Create execution context
-    context = ExecutionContext(
-        execution_id=execution_id,
-        workflow_id=workflow_id,
-        step_name=step_class.__name__,
-    )
-
-    # Instantiate step (subclasses must provide input/output models)
-    step = step_class()
-
-    # Execute and return wrapped output
-    output = step.execute_raw(inputs, context)
-    return output.model_dump()
+def _exit_code(result: dict[str, Any]) -> int:
+    """Return a process status that preserves the dispatched step result."""
+    if not result["accepted"]:
+        return 1
+    output = result.get("output")
+    if not isinstance(output, dict):
+        return 1
+    return 0 if output.get("StatusCode") == 0 else 1
 
 
 def main() -> int:
-    """CLI entrypoint for local step testing.
-
-    Returns:
-        Exit code (0 = success, 1 = failure)
-    """
-    parser = argparse.ArgumentParser(
-        description="Run a Syntara step locally for testing",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Run with inline JSON inputs
-  python -m syntara_sdk.runner \\
-    --module examples.http_request.src.main \\
-    --class HttpRequestStep \\
-    --inputs '{"url": "https://httpbin.org/get", "method": "GET"}'
-
-  # Run with inputs from file
-  python -m syntara_sdk.runner \\
-    --module examples.http_request.src.main \\
-    --class HttpRequestStep \\
-    --inputs-file inputs.json
-        """,
-    )
-
-    parser.add_argument(
-        "--entrypoint",
-        help="Manifest step handle, 'module.path:ClassName'",
-    )
-    parser.add_argument(
-        "--module",
-        help="Python module path (e.g., 'examples.http_request.src.main')",
-    )
-    parser.add_argument(
-        "--class",
-        dest="class_name",
-        help="Step class name (e.g., 'HttpRequestStep')",
-    )
-
-    input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument(
-        "--inputs",
-        help="Input JSON string",
-    )
-    input_group.add_argument(
-        "--inputs-file",
-        type=Path,
-        help="Path to input JSON file",
-    )
-
-    parser.add_argument(
-        "--execution-id",
-        help="Execution ID (generated if not provided)",
-    )
-    parser.add_argument(
-        "--workflow-id",
-        help="Workflow ID",
-    )
-    parser.add_argument(
-        "--output-file",
-        type=Path,
-        help="Write output to file (prints to stdout if not provided)",
-    )
-
+    """Run exactly one request and then exit."""
+    parser = argparse.ArgumentParser(description="Run a plugin-level Syntara dispatcher")
+    parser.add_argument("--runtime-module", required=True)
+    request_group = parser.add_mutually_exclusive_group()
+    request_group.add_argument("--request", help="one JSON StepInvocation object")
+    request_group.add_argument("--request-file", type=Path, help="file containing one request object")
     args = parser.parse_args()
 
     try:
-        # Load step class, from the manifest entrypoint or an explicit pair
-        if args.entrypoint:
-            module_path, class_name = parse_entrypoint(args.entrypoint)
-        elif args.module and args.class_name:
-            module_path, class_name = args.module, args.class_name
-        else:
-            parser.error("provide --entrypoint, or both --module and --class")
-        print(f"Loading step: {module_path}:{class_name}", file=sys.stderr)
-        step_class = load_step_class(module_path, class_name)
-
-        # Load inputs
-        if args.inputs:
-            inputs = json.loads(args.inputs)
-        else:
-            print(f"Loading inputs from: {args.inputs_file}", file=sys.stderr)
-            inputs = load_inputs_from_file(args.inputs_file)
-
-        # Run step
-        print("Executing step...", file=sys.stderr)
-        output = run_step_local(
-            step_class,
-            inputs,
-            execution_id=args.execution_id,
-            workflow_id=args.workflow_id,
-        )
-
-        # Write output
-        output_json = json.dumps(output, indent=2)
-        if args.output_file:
-            args.output_file.write_text(output_json)
-            print(f"Output written to: {args.output_file}", file=sys.stderr)
-        else:
-            print(output_json)
-
-        # Exit code based on StatusCode
-        return 0 if output["StatusCode"] == 0 else 1
-
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        runtime = load_plugin_runtime(args.runtime_module)
+        request = _read_request(args)
+        result = dispatch_json(runtime, request)
+        print(json.dumps(result))
+        return _exit_code(result)
+    except (ImportError, TypeError, ValueError, OSError, json.JSONDecodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

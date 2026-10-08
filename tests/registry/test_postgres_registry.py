@@ -357,8 +357,8 @@ def create_app(engine) -> FastAPI:
         namespace = "syntara"
         # Plugin registration supplies this value; steps have no independent version.
         version = "1.0.0"
-        # Where the plugin artifact lives. Distinct from spec.execution.image,
-        # which names the runtime the step executes in.
+        # Where the plugin artifact lives. This legacy prototype does not
+        # receive a root plugin runtime image.
 
         # Upsert on (name, version): re-publishing the same version updates in
         # place, a new version inserts a new row.
@@ -503,11 +503,11 @@ def test_register_http_request_succeeds(client: TestClient) -> None:
     record = response.json()["data"]
     assert record["name"] == "http_request"
     assert record["enabled"] is True
-    # Registering a bare manifest supplies no artifact ref, and the runtime
-    # image must not be borrowed to fill it.
+    # Registering a bare manifest supplies no artifact ref.
     assert record["image_ref"] is None
-    runtime = record["descriptor"]["spec"]["execution"]["image"]
-    assert runtime == "quay.io/syntara/http-request-executor@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    assert record["descriptor"]["spec"]["execution"] == {
+        "entrypoint": "src.main:HttpRequestStep"
+    }
     UUID(record["id"])  # id is a real UUID
 
 

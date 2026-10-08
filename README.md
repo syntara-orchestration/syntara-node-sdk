@@ -30,15 +30,15 @@ pip install -e .
 
 ### Scaffold and Package Steps
 
-Use the CLI to create step source and declare its workload image. Before a
-plugin can be built, resolve each workload image to an immutable digest and
-add the exact repository/digest to the root plugin inventory:
+Use the CLI to create step source. Before a plugin can be built, resolve its
+one runtime image to an immutable digest and set `spec.runtime.image` in the
+root plugin manifest:
 
 ```bash
 syntara-sdk init normalize_payload --tier 2
 syntara-sdk init customer_lookup --tier 3 --image quay.io/example/customer-lookup@sha256:<64-hex-digest>
 # Copy plugin.example.yaml to plugin.yaml, point targets at the manifests,
-# and use digest-pinned workload references in both files.
+# and set its digest-pinned shared runtime image at spec.runtime.image.
 # For example: quay.io/example/customer-lookup@sha256:<64-hex-digest>
 syntara-sdk build plugin.yaml --registry localhost:5000/syntara/plugins/customer-lookup:1.0.0 --output customer-lookup-oci
 
@@ -49,8 +49,8 @@ syntara-sdk push plugin.yaml \
 
 Builds emit one OCI artifact per plugin. Its metadata contains the validated root
 manifest plus compiled descriptors for every explicitly targeted step, including a
-deterministic `contentDigest` for each descriptor. Runtime images named by targeted
-steps must be listed at the root as immutable `repository`/`sha256` inventory entries.
+deterministic `contentDigest` for each descriptor. Every descriptor derives the one root
+`spec.runtime.image`, and that immutable digest is included in its content digest.
 
 `push` publishes the OCI metadata and then calls
 `POST /api/v1/plugins` to add every step in the plugin release to Syntara's catalog.
@@ -92,9 +92,7 @@ metadata:
 spec:
   category: action
   execution:
-    image: quay.io/syntara/http-request-executor@sha256:1111111111111111111111111111111111111111111111111111111111111111
     entrypoint: src.main:MyHttpStep
-
   declaredRequirements:
     capabilities:
       - network-egress
@@ -156,11 +154,10 @@ print(f"✓ Compiled: {descriptor['metadata']['name']}")
 **Test your step locally:**
 
 ```bash
-# Run the SDK runner
+# Run one request through the plugin image's fixed dispatcher
 python -m syntara_sdk.runner \
-  --module my_step_package.src.main \
-  --class MyStep \
-  --inputs-file test_inputs.json
+  --runtime-module plugin_runtime \
+  --request '{"step_identity":"example/my_plugin/my_step","inputs":{"url":"https://example.com"},"context":{}}'
 ```
 
 ### Publish and Register
@@ -209,14 +206,13 @@ graph LR
 
 ### Execution Placement
 
-Manifests do not declare where a step runs; AO/admin policy selects placement. The plugin OCI
-artifact is declarative metadata only. `spec.execution.image` names the separate workload OCI
-image, which contains the step implementation, dependencies, and step-side gRPC runtime.
-`spec.execution.entrypoint` (`module.path:ClassName`) is an optional control-plane loading handle,
-not the container process entrypoint, and it is not required by the step-side gRPC path. Its
-presence does not select placement: every workload image supports the gRPC path, while an
-entrypoint indicates that direct control-plane loading is supported. Control-plane loading from
-workload images is not implemented yet. See [Dispatch and Handoff](docs/architecture.md#dispatch-and-handoff).
+Step manifests do not declare an image or execution placement, but every step declares its
+implementation handle at `spec.execution.entrypoint`. A plugin has one digest-pinned
+`spec.runtime.image` that contains a fixed dispatcher and all plugin step implementations. For
+each workflow-step invocation, the execution plane starts a short-lived pod from that image and
+dispatches by the full qualified `namespace/plugin/step` identity. The same implementation handle
+is available if policy selects direct control-plane execution. See
+[Dispatch and Handoff](docs/architecture.md#dispatch-and-handoff).
 
 ## Examples
 
@@ -238,11 +234,10 @@ pytest tests/registry/test_postgres_registry.py
 # HTTP Request step unit tests (12 tests)
 pytest tests/test_http_step.py -v
 
-# Run step directly with CLI runner
+# Run one plugin step through the fixed runtime dispatcher
 python -m syntara_sdk.runner \
-  --module tests.fixtures.steps.http_request.src.main \
-  --class HttpRequestStep \
-  --inputs-file test_inputs.json
+  --runtime-module plugin_runtime \
+  --request '{"step_identity":"example/my_plugin/my_step","inputs":{},"context":{}}'
 ```
 
 ## Security Model

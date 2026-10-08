@@ -38,21 +38,14 @@ spec:
   # Step category: action | task | workflow | trigger
   category: action
 
+  # Required implementation handle for this step. It identifies the code used
+  # by either direct control-plane execution or the plugin image dispatcher;
+  # it is neither a container command nor an execution-placement selector.
+  execution:
+    entrypoint: steps.example_step.main:ExampleStep
+
   # Sandbox, egress, and worker-pool policy are intentionally omitted here.
   # Administrators supply those controls during plugin registration.
-
-  # Workload image. It contains this step's implementation, dependencies, and
-  # step-side gRPC server/runtime; it is distinct from the metadata package
-  # artifact. The manifest does not choose control-plane or EP placement.
-  execution:
-    # Pin an implementation-bearing workload image. It must exactly match a
-    # repository/digest entry in the root plugin inventory.
-    image: quay.io/example/my-http-step@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-
-    # Optional control-plane loading handle, "module.path:ClassName", resolved
-    # from the workload image. It is not a container command, is not used by
-    # the step-side gRPC path, and does not select placement.
-    entrypoint: main:ExampleStep
 
   # Developer-declared extension requirements. These describe the capabilities
   # the extension needs and are inspected by administrators before execution.

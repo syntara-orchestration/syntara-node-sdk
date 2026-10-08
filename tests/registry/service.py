@@ -44,9 +44,8 @@ class RegistryService:
         descriptor = compile_manifest_data(dict(manifest))
         metadata = descriptor["metadata"]
         spec = descriptor["spec"]
-        # image_ref is where the plugin artifact was published. It is a
-        # different thing from spec.execution.image, the runtime the step runs
-        # in, so neither is derived from or written over the other.
+        # image_ref is where the plugin artifact was published. This retired
+        # single-step prototype does not receive a root plugin runtime image.
 
         name = metadata["name"]
         namespace = plugin_namespace

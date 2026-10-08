@@ -15,9 +15,7 @@ metadata:
 spec:
   category: trigger
   execution:
-    image: quay.io/syntara/platform-trigger@sha256:4444444444444444444444444444444444444444444444444444444444444444
     entrypoint: main:SubworkflowTriggerStep
-
   inputs:
     type: object
     properties:
