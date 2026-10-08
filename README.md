@@ -329,13 +329,12 @@ CI runs the full test suite on Python 3.12, 3.13, and 3.14, plus pre-commit chec
 Run the same checks locally from the repository root:
 
 ```bash
-uv sync --locked --group dev
-uv run --no-sync --no-build pre-commit run --all-files
-PYTHONPATH=sdk-python:tools uv run --no-sync --no-build pytest
+make install
+make test
+make check
 ```
 
-Run either quality check independently with `pre-commit run ruff --all-files` or
-`pre-commit run mypy --all-files` through the same `uv run --no-sync --no-build` prefix.
+Use `make lint` or `make typecheck` to run either pre-commit hook independently.
 
 ### Project Structure
 
