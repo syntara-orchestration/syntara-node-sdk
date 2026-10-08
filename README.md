@@ -327,6 +327,18 @@ export SYNTARA_TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/s
 uv run pytest tests/registry/test_postgres_registry.py
 ```
 
+### Testing and quality checks
+
+CI runs the full test suite, Ruff linting, and mypy type checks on Python 3.12.
+Run the same checks locally from the repository root:
+
+```bash
+uv sync --locked --all-extras
+uv run pytest
+uv run ruff check .
+uv run mypy sdk-python/syntara_sdk tools/syntara_tools
+```
+
 ### Project Structure
 
 ```
