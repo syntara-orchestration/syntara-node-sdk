@@ -6,7 +6,7 @@ import json
 import traceback
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -60,12 +60,7 @@ class StandardOutputWrapper(BaseModel):
     )
 
 
-# Type variables for generic input/output types
-TInput = TypeVar("TInput", bound=BaseModel)
-TOutput = TypeVar("TOutput", bound=BaseModel)
-
-
-class BaseStep(ABC, Generic[TInput, TOutput]):
+class BaseStep[TInput: BaseModel, TOutput: BaseModel](ABC):
     """Abstract base for all Syntara steps.
 
     Provides typed input validation, automatic StandardOutputWrapper wrapping,
@@ -165,7 +160,6 @@ class BaseStep(ABC, Generic[TInput, TOutput]):
         Raises:
             Exception: Any exception will be caught and wrapped in StandardOutputWrapper
         """
-        pass
 
     def execute_raw(
         self,
@@ -232,14 +226,14 @@ class BaseStep(ABC, Generic[TInput, TOutput]):
             result = StandardOutputWrapper(
                 Result=output.model_dump(),
                 StatusCode=0,
-                StatusMessage=f"Execution completed successfully",
+                StatusMessage="Execution completed successfully",
                 ErrorMessage="",
             )
 
             context.log_execution_complete(0, "Success")
             return result
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - steps must return a failure envelope
             # Catch any unhandled exceptions
             error_msg = self._format_exception(e)
             context.log_execution_error(e)
@@ -280,7 +274,7 @@ class BaseStep(ABC, Generic[TInput, TOutput]):
         return f"{type(error).__name__}: {error}\n\nStack trace:\n{tb}"
 
 
-class ActionStep(BaseStep[TInput, TOutput]):
+class ActionStep[TInput: BaseModel, TOutput: BaseModel](BaseStep[TInput, TOutput]):
     """Base class for action steps (domain and API integrations).
 
     Action steps:
@@ -291,10 +285,9 @@ class ActionStep(BaseStep[TInput, TOutput]):
     Examples: http_request, github_issue, slack_message
     """
 
-    pass
 
 
-class TaskStep(BaseStep[TInput, TOutput]):
+class TaskStep[TInput: BaseModel, TOutput: BaseModel](BaseStep[TInput, TOutput]):
     """Base class for task steps (atomic compute operations).
 
     Task steps:
@@ -305,10 +298,9 @@ class TaskStep(BaseStep[TInput, TOutput]):
     Examples: script_executor, data_transformer
     """
 
-    pass
 
 
-class WorkflowStep(BaseStep[TInput, TOutput]):
+class WorkflowStep[TInput: BaseModel, TOutput: BaseModel](BaseStep[TInput, TOutput]):
     """Base class for workflow steps (in-memory control flow logic).
 
     Workflow steps:
@@ -319,10 +311,9 @@ class WorkflowStep(BaseStep[TInput, TOutput]):
     Examples: loop, condition, switch, converge, subworkflow_call
     """
 
-    pass
 
 
-class TriggerStep(BaseStep[TInput, TOutput]):
+class TriggerStep[TInput: BaseModel, TOutput: BaseModel](BaseStep[TInput, TOutput]):
     """Base class for trigger steps (event entry points).
 
     Trigger steps:
@@ -331,5 +322,3 @@ class TriggerStep(BaseStep[TInput, TOutput]):
 
     Examples: webhook, schedule, manual, subworkflow_trigger
     """
-
-    pass

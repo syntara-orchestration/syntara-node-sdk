@@ -6,7 +6,7 @@ authors = [
     {name = "Syntara Team"}
 ]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.15"
 dependencies = [
     "fastapi>=0.110",
     "httpx>=0.27",
@@ -16,21 +16,22 @@ dependencies = [
     "psycopg[binary]>=3.1",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
     "ruff>=0.1",
     "mypy>=1.8",
+    "pre-commit>=3.5",
     "types-pyyaml",
     "respx>=0.21",  # HTTP mocking for step unit tests
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/syntara-step-sdk"
-Documentation = "https://github.com/yourusername/syntara-step-sdk/blob/main/docs/architecture.md"
-Repository = "https://github.com/yourusername/syntara-step-sdk"
-Issues = "https://github.com/yourusername/syntara-step-sdk/issues"
+Homepage = "https://github.com/syntara-orchestration/syntara-plugin-sdk"
+Documentation = "https://github.com/syntara-orchestration/syntara-plugin-sdk/blob/devel/docs/architecture.md"
+Repository = "https://github.com/syntara-orchestration/syntara-plugin-sdk"
+Issues = "https://github.com/syntara-orchestration/syntara-plugin-sdk/issues"
 
 [project.scripts]
 syntara-sdk = "syntara_tools.cli:main"

@@ -5,8 +5,9 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
-from respx import MockRouter
+from pydantic import ValidationError
 from syntara_sdk import ExecutionContext
+
 from tests.fixtures.steps.http_request.src.main import HttpRequestStep
 from tests.fixtures.steps.http_request.src.models import (
     HttpMethod,
@@ -114,7 +115,7 @@ class TestHttpRequestStep:
 
     def test_input_validation_requires_url(self) -> None:
         """Test that url is required."""
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises(ValidationError):
             HttpRequestInput(method=HttpMethod.GET)
 
     def test_input_validation_url_must_have_protocol(self) -> None:

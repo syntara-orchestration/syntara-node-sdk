@@ -7,10 +7,12 @@ import json
 import sys
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from syntara_sdk.context import ExecutionContext
 from syntara_sdk.step import BaseStep
+
+StepClass = type[BaseStep[Any, Any]]
 
 
 def parse_entrypoint(entrypoint: str) -> tuple[str, str]:
@@ -31,7 +33,7 @@ def parse_entrypoint(entrypoint: str) -> tuple[str, str]:
     return module_path, class_name
 
 
-def load_step_class(module_path: str, class_name: str) -> type[BaseStep]:
+def load_step_class(module_path: str, class_name: str) -> StepClass:
     """Dynamically load a step class from a Python module.
 
     Args:
@@ -56,7 +58,7 @@ def load_step_class(module_path: str, class_name: str) -> type[BaseStep]:
             f"Class '{class_name}' not found in module '{module_path}'"
         )
 
-    if not issubclass(step_class, BaseStep):
+    if not isinstance(step_class, type) or not issubclass(step_class, BaseStep):
         raise TypeError(
             f"{class_name} must be a subclass of BaseStep"
         )
@@ -81,11 +83,14 @@ def load_inputs_from_file(path: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"Input file not found: {path}")
 
     with path.open() as f:
-        return json.load(f)
+        payload = json.load(f)
+    if not isinstance(payload, dict):
+        raise TypeError("Input file must contain a JSON object")
+    return cast(dict[str, Any], payload)
 
 
 def run_step_local(
-    step_class: type[BaseStep],
+    step_class: StepClass,
     inputs: dict[str, Any],
     execution_id: str | None = None,
     workflow_id: str | None = None,
@@ -109,11 +114,11 @@ def run_step_local(
     )
 
     # Instantiate step (subclasses must provide input/output models)
-    step = step_class()
+    step = cast(Any, step_class)()
 
     # Execute and return wrapped output
     output = step.execute_raw(inputs, context)
-    return output.model_dump()
+    return cast(dict[str, Any], output.model_dump())
 
 
 def main() -> int:
@@ -220,7 +225,7 @@ Examples:
         # Exit code based on StatusCode
         return 0 if output["StatusCode"] == 0 else 1
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - CLI boundary reports all execution failures
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
