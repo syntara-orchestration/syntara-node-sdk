@@ -40,7 +40,6 @@ class RegistryService:
         image_ref: str | None = None,
     ) -> StepType:
         """Register a raw YAML/JSON manifest from the Git or REST path."""
-
         descriptor = compile_manifest_data(dict(manifest))
         metadata = descriptor["metadata"]
         spec = descriptor["spec"]
@@ -89,7 +88,6 @@ class RegistryService:
         image_ref: str | None = None,
     ) -> StepType:
         """Parse and register a raw Git or REST YAML/JSON request body."""
-
         try:
             manifest = yaml.safe_load(payload)
         except yaml.YAMLError as exc:
@@ -112,7 +110,6 @@ class RegistryService:
         plugin_version: str,
     ) -> StepType:
         """Inspect OCI artifact metadata and register its embedded manifest."""
-
         if oci_manifest.get("artifactType") != LEGACY_OCI_ARTIFACT_TYPE:
             raise ValueError("OCI artifact is not a step manifest artifact")
         annotations = oci_manifest.get("annotations")
@@ -140,7 +137,6 @@ class RegistryService:
         plugin_version: str,
     ) -> StepType:
         """Compatibility entry point for callers naming OCI metadata headers."""
-
         return self.register_oci_manifest(
             image_ref,
             headers,
@@ -151,7 +147,6 @@ class RegistryService:
 
 def validate_oci_manifest(oci_manifest: Mapping[str, Any]) -> list[str]:
     """Perform the fast, network-free OCI metadata validation step."""
-
     if oci_manifest.get("artifactType") != LEGACY_OCI_ARTIFACT_TYPE:
         return ["artifactType must identify a step manifest artifact"]
     annotations = oci_manifest.get("annotations")

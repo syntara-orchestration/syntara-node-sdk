@@ -41,7 +41,6 @@ def test_parse_entrypoint_rejects_non_handles(bad: str) -> None:
 
 def test_schema_rejects_shell_command_entrypoint() -> None:
     """A shell command would bypass BaseStep validation, so the schema blocks it."""
-
     validator = _entrypoint_validator()
     assert list(validator.iter_errors("python /workspace/main.py"))
     assert not list(validator.iter_errors("src.main:HttpRequestStep"))
@@ -49,7 +48,6 @@ def test_schema_rejects_shell_command_entrypoint() -> None:
 
 def test_fixture_entrypoints_resolve_to_real_classes() -> None:
     """Every declared entrypoint must name a class that actually exists."""
-
     for manifest_path in sorted(FIXTURES.glob("*/manifest.yaml")):
         manifest = yaml.safe_load(manifest_path.read_text())
         entrypoint = manifest["spec"]["execution"].get("entrypoint")
@@ -65,7 +63,6 @@ def test_fixture_entrypoints_resolve_to_real_classes() -> None:
 
 def test_scaffolded_step_defines_the_class_its_entrypoint_names(tmp_path: Path) -> None:
     """The scaffold must not emit a handle pointing at a class it never writes."""
-
     init_step(
         tmp_path / "my_thing",
         "my_thing",
@@ -83,7 +80,6 @@ def test_scaffolded_step_defines_the_class_its_entrypoint_names(tmp_path: Path) 
 
 def test_schema_allows_a_workload_without_a_control_plane_handle() -> None:
     """A workload image may omit the optional control-plane loading handle."""
-
     validator = jsonschema.Draft7Validator(
         {**SCHEMA, "$ref": "#/definitions/StepTypeManifest"}
     )
@@ -99,7 +95,6 @@ def test_workload_boundary_contract_without_control_plane_handle() -> None:
     The SDK has no gRPC service or generated protobuf runtime. This test fixes the
     transport-neutral request/response contract that a step-side adapter must carry.
     """
-
     manifest = yaml.safe_load((FIXTURES / "http_request" / "manifest.yaml").read_text())
     del manifest["spec"]["execution"]["entrypoint"]
 
@@ -150,7 +145,6 @@ def test_workload_boundary_contract_without_control_plane_handle() -> None:
 
 def test_schema_requires_a_workload_image_even_without_a_control_plane_handle() -> None:
     """Every separately packaged step has a workload image."""
-
     validator = jsonschema.Draft7Validator(
         {**SCHEMA, "$ref": "#/definitions/StepTypeManifest"}
     )
@@ -166,7 +160,6 @@ def test_schema_requires_a_workload_image_even_without_a_control_plane_handle() 
 
 def test_scaffolded_containerfile_has_a_safe_local_development_runner(tmp_path: Path) -> None:
     """The scaffold's local command must not bypass BaseStep safeguards."""
-
     init_step(
         tmp_path / "my_thing",
         "my_thing",
@@ -187,7 +180,6 @@ def test_scaffolded_containerfile_has_a_safe_local_development_runner(tmp_path: 
 
 def test_manifests_never_carry_credential_identifiers() -> None:
     """A step type is published before any credential exists, so it cannot name one."""
-
     validator = jsonschema.Draft7Validator({**SCHEMA, "$ref": "#/definitions/CredentialRequirement"})
     requirement = {
         "name": "api_auth",

@@ -41,7 +41,6 @@ class SubworkflowTriggerStep(TriggerStep[SubworkflowTriggerInput, SubworkflowTri
 
 def validate_child_entry(inputs: dict[str, Any]) -> dict[str, Any]:
     """Return a standard result for a child workflow entry payload."""
-
     input_variables = inputs.get("input_variables")
     if not isinstance(input_variables, dict):
         return {

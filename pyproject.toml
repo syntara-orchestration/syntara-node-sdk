@@ -56,18 +56,28 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes
-    "I",   # isort
-    "B",   # flake8-bugbear
-    "C4",  # flake8-comprehensions
-    "UP",  # pyupgrade
-]
+select = ["ALL"]
 ignore = [
-    "E501",  # line too long (handled by formatter)
+    "A002", "ANN202", "ANN401", "C901", "COM812", "CPY001", "D100", "D101",
+    "D102", "D103", "D105", "D107", "D200", "D202", "D203", "D205", "D209",
+    "D212", "D213", "D400", "D413", "D415", "DTZ003", "E501", "EM101", "EM102",
+    "EXE001", "FBT001", "FIX002", "FLY002", "G004", "N818", "PLC0415", "PLR0912",
+    "PLR0913", "PLR0915", "PLR1714", "PLR2004", "PLR0917", "PLW1510", "PTH101",
+    "PTH103", "PTH108", "PTH110", "PTH123", "PT018", "PYI034", "Q000", "Q001", "RET504",
+    "RET505", "RUF005", "RUF010", "RUF022", "RUF043", "RUF100", "S101", "S103",
+    "S104", "S106", "S108", "T201", "TC003", "TC006", "TRY003", "TRY004", "TRY300",
+    "TRY301", "TRY400",
+    "D404",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "INP001", "S101", "ANN001", "ANN201", "D102", "D103", "PLR2004",
+    "TD002", "TD003", "ARG001", "ARG002", "SLF001", "PERF401", "S110",
+    "BLE001", "SIM105", "PLC0415", "D401", "PT011", "PT012", "PGH003", "SIM117",
+    "S603", "S607",
+]
+"**/__init__.py" = ["F401", "D104"]
 
 [tool.mypy]
 python_version = "3.12"

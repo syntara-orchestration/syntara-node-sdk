@@ -83,7 +83,6 @@ def test_nested_redact_values_are_detected() -> None:
 
 def test_step_exception_still_reports_failure() -> None:
     """Scrubbing tracebacks is the platform's job, not the SDK's (R5)."""
-
     result = RaisingStep().execute_raw(dict(INPUTS))
 
     assert result.StatusCode == 1

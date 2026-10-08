@@ -59,15 +59,13 @@ real JSONB column and DDL CHECK constraint instead of the SQLite default, e.g.
     SYNTARA_TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/syntara_test
 """
 
-from __future__ import annotations
-
 import json
 import os
 import re
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -133,7 +131,8 @@ class StepCategory(StrEnum):
 class RegistryModel(SQLModel):
     """Base with a private MetaData so this prototype's ``step_types`` table does
     not collide with the identically named table in the sibling
-    ``test_register.py`` when both are collected in a single pytest session."""
+    ``test_register.py`` when both are collected in a single pytest session.
+    """
 
     metadata = MetaData()
 
@@ -319,8 +318,8 @@ def create_app(engine) -> FastAPI:
     @app.post("/api/v1/step-types", status_code=201)
     async def register_step_type(
         request: Request,
+        session: Annotated[Session, Depends(get_session)],
         image_ref: str | None = None,
-        session: Session = Depends(get_session),  # noqa: B008 - FastAPI dependency injection
     ) -> dict[str, Any]:
         """Validate, compile, and upsert a step manifest into the registry.
 
@@ -389,14 +388,12 @@ def create_app(engine) -> FastAPI:
 
     @app.get("/api/v1/step-types")
     def list_step_types(
+        session: Annotated[Session, Depends(get_session)],
         category: str | None = None,
         enabled: bool | None = None,
-        view: str | None = Query(
-            None, description="Set to 'palette' for React Flow drawer summaries."
-        ),
+        view: Annotated[str | None, Query(description="Set to 'palette' for React Flow drawer summaries.")] = None,
         limit: int = DEFAULT_PAGE_LIMIT,
         offset: int = 0,
-        session: Session = Depends(get_session),  # noqa: B008 - FastAPI dependency injection
     ) -> dict[str, Any]:
         """List step types with the documented ``{data, meta}`` envelope."""
         stmt = select(StepType)
@@ -429,7 +426,7 @@ def create_app(engine) -> FastAPI:
     @app.get("/api/v1/step-types/{id_or_name}")
     def get_step_type(
         id_or_name: str,
-        session: Session = Depends(get_session),  # noqa: B008 - FastAPI dependency injection
+        session: Annotated[Session, Depends(get_session)],
     ) -> dict[str, Any]:
         """Fetch a single step type record (id- or name-addressable)."""
         return {"data": _record(_resolve(session, id_or_name))}
@@ -437,7 +434,7 @@ def create_app(engine) -> FastAPI:
     @app.get("/api/v1/step-types/{id_or_name}/descriptor")
     def get_step_descriptor(
         id_or_name: str,
-        session: Session = Depends(get_session),  # noqa: B008 - FastAPI dependency injection
+        session: Annotated[Session, Depends(get_session)],
     ) -> dict[str, Any]:
         """Return the raw compiled descriptor, unwrapped, for the canvas renderer.
 
@@ -470,7 +467,7 @@ def make_engine(url: str | None = None):
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-@pytest.fixture()
+@pytest.fixture
 def engine():
     eng = make_engine(os.environ.get(POSTGRES_URL_ENV) or None)
     try:
@@ -479,7 +476,7 @@ def engine():
         RegistryModel.metadata.drop_all(eng)
 
 
-@pytest.fixture()
+@pytest.fixture
 def client(engine) -> TestClient:
     return TestClient(create_app(engine))
 
@@ -675,7 +672,7 @@ def _run_standalone() -> int:
         except pytest.skip.Exception as exc:  # type: ignore[attr-defined]
             skipped += 1
             print(f"  - {name}: SKIP ({exc})")
-        except Exception as exc:  # noqa: BLE001 - report and continue
+        except Exception as exc:
             failed += 1
             print(f"  ✗ {name}: {type(exc).__name__}: {exc}")
         else:

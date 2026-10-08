@@ -64,7 +64,6 @@ def _default_registry_url() -> str:
 
 def parse_image_reference(image_ref: str, registry_url: str | None = None) -> ParsedImageReference:
     """Parse a local or remote OCI reference without contacting the registry."""
-
     raw = image_ref.strip()
     if not raw:
         raise ValueError("image_ref must not be empty")
@@ -189,7 +188,6 @@ class OCIRegistryClient:
 
     def _send(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Send a request with bounded retries for transient failures."""
-
         for attempt in range(self._max_retries + 1):
             try:
                 response = self._client.request(method, url, **kwargs)
@@ -243,7 +241,6 @@ class OCIRegistryClient:
         registries); delegated realms require HTTPS and an explicit host
         allowlist supplied by the caller or environment.
         """
-
         parsed_realm = urlsplit(realm)
         if not parsed_realm.scheme or not parsed_realm.netloc or parsed_realm.username or parsed_realm.password:
             raise OCIRegistryError("OCI token realm must be an absolute URL without userinfo")
@@ -323,7 +320,6 @@ class OCIRegistryClient:
 
     def get_manifest(self, image_ref: str) -> dict[str, Any]:
         """Fetch OCI manifest JSON for a known artifact reference."""
-
         parsed = parse_image_reference(image_ref, self.registry_url)
         response = self._request(
             "GET", self._base_url(parsed), f"/v2/{parsed.repository}/manifests/{parsed.reference}",
@@ -350,7 +346,6 @@ class OCIRegistryClient:
 
     def inspect_plugin_metadata(self, image_ref: str) -> dict[str, Any]:
         """Fetch and validate the plugin metadata layer for a known artifact."""
-
         parsed = parse_image_reference(image_ref, self.registry_url)
         base_url = self._base_url(parsed)
         manifest = self.get_manifest(image_ref)
@@ -388,7 +383,6 @@ class OCIRegistryClient:
 
     def discover_plugin_metadata(self, image_refs: Iterable[str]) -> list[tuple[str, dict[str, Any]]]:
         """Inspect only supplied references; registry catalog access is never used."""
-
         discovered: list[tuple[str, dict[str, Any]]] = []
         for image_ref in image_refs:
             try:
@@ -405,7 +399,6 @@ class OCIRegistryClient:
         layer_contents: Sequence[bytes] = (),
     ) -> str:
         """Push config and descriptor-matched layers before the OCI manifest."""
-
         parsed = parse_image_reference(image_ref, self.registry_url)
         base_url = self._base_url(parsed)
         config_descriptor = manifest.get("config")

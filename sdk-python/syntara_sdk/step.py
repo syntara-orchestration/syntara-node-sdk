@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
+from pydantic.errors import PydanticInvalidForJsonSchema
 
 from syntara_sdk.context import ExecutionContext
 
@@ -110,7 +111,7 @@ class BaseStep[TInput: BaseModel, TOutput: BaseModel](ABC):
 
         try:
             schema = input_model.model_json_schema()
-        except Exception:  # noqa: BLE001 - a model that cannot emit a JSON
+        except PydanticInvalidForJsonSchema:
             # schema simply has no declarable redact fields; never block init.
             return frozenset()
         return frozenset(

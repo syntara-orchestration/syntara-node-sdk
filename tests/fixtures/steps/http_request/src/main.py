@@ -47,6 +47,7 @@ class HttpRequestStep(ActionStep[HttpRequestInput, HttpRequestOutput]):
 
         Raises:
             httpx.HTTPError: If request fails
+
         """
         context.logger.info(f"Executing {inputs.method} request to {inputs.url}")
 
@@ -128,11 +129,12 @@ class HttpRequestStep(ActionStep[HttpRequestInput, HttpRequestOutput]):
 
         Returns:
             Parsed response body (dict for JSON, str for text)
+
         """
         if format == ResponseFormat.TEXT:
             return response.text
 
-        elif format == ResponseFormat.JSON:
+        if format == ResponseFormat.JSON:
             try:
                 return response.json()
             except json.JSONDecodeError as e:

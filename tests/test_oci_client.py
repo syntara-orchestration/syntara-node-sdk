@@ -307,7 +307,6 @@ def test_push_rejects_cross_host_upload_redirect() -> None:
 
 def test_plugin_metadata_artifact_publish_inspect_and_registration_flow(tmp_path: Path) -> None:
     """Repository doubles cover publishing, metadata inspection, and registration together."""
-
     plugin_path = _plugin_source(tmp_path, "full_flow")
     uploaded_blobs: dict[str, bytes] = {}
     pushed_manifest: dict[str, object] = {}

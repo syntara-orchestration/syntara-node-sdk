@@ -16,7 +16,6 @@ def test_every_step_manifest_requires_a_workload_image() -> None:
 
 def test_manifests_cannot_declare_execution_placement() -> None:
     """Placement is Execution-Plane-determined; manifests must not declare it."""
-
     manifest = load_manifest(TESTS_DIR / "fixtures" / "steps" / "http_request" / "manifest.yaml")
     manifest["spec"]["execution"]["type"] = "container"
     errors = validate_manifest(manifest)
