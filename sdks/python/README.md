@@ -65,7 +65,16 @@ the config inventory. Inline documents remain in the canonical metadata layer.
 
 ## Offline authoring command
 
-The `syntara-plugin-sdk` distribution installs the `syntara-plugin` command:
+The `syntara-plugin-sdk` distribution installs the `syntara-plugin` command.
+When released, it is one public dependency: the contracts and Python runtime
+are installed transitively.
+
+```zsh
+uv tool install syntara-plugin-sdk
+# or: python -m pip install syntara-plugin-sdk
+```
+
+The command supports:
 
 ```zsh
 syntara-plugin init ./my-plugin --namespace acme

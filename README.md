@@ -177,6 +177,26 @@ python -m pytest
 
 Each repository retains its own `pyproject.toml` and `uv.lock`; `--inexact` keeps shared-environment dependencies from sibling repositories intact.
 
+## Installation
+
+When the SDK is released, a plugin author installs one public Python package.
+The contracts and Python runtime are normal transitive dependencies; authors do
+not install or select them individually:
+
+```zsh
+uv tool install syntara-plugin-sdk
+# or, inside an existing Python environment:
+python -m pip install syntara-plugin-sdk
+```
+
+For a contributor working from this repository, one workspace command installs
+the editable distributions and exposes the same CLI:
+
+```zsh
+uv sync --all-packages --active --inexact
+syntara-plugin --help
+```
+
 ## Container runtime protocol
 
 The container ABI is the application-data channel between the Execution Plane
