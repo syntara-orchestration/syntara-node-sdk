@@ -311,20 +311,15 @@ Administrators can audit these requirements **before** execution-plane dispatch.
 git clone https://github.com/syntara-orchestration/syntara-plugin-sdk.git
 cd syntara-plugin-sdk
 
-# Install the SDK package
-pip install -e ./sdk-python
-
-# Install dev dependencies
-pip install -e .
-
-# Install test dependencies
-pip install pytest pytest-mock respx httpx
+# Install the locked development dependencies
+uv sync --locked --group dev
 
 # Set up PostgreSQL test database (optional)
 export SYNTARA_TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/syntara_test
 
-# Run tests
-uv run pytest tests/registry/test_postgres_registry.py
+# Run the full quality suite
+uv run --no-sync --no-build pre-commit run --all-files
+PYTHONPATH=sdk-python:tools uv run --no-sync --no-build pytest
 ```
 
 ### Testing and quality checks
@@ -334,12 +329,13 @@ CI runs the full test suite on Python 3.12, 3.13, and 3.14, plus pre-commit chec
 Run the same checks locally from the repository root:
 
 ```bash
-make install
-make test
-make check
+uv sync --locked --group dev
+uv run --no-sync --no-build pre-commit run --all-files
+PYTHONPATH=sdk-python:tools uv run --no-sync --no-build pytest
 ```
 
-Use `make lint` or `make typecheck` to run either pre-commit hook independently.
+Run either quality check independently with `pre-commit run ruff --all-files` or
+`pre-commit run mypy --all-files` through the same `uv run --no-sync --no-build` prefix.
 
 ### Project Structure
 
