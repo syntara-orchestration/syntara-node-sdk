@@ -1,7 +1,7 @@
 # Syntara Plugin SDK
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12-3.14](https://img.shields.io/badge/python-3.12--3.14-blue.svg)](https://www.python.org/downloads/)
 [![PostgreSQL 15+](https://img.shields.io/badge/postgresql-15+-blue.svg)](https://www.postgresql.org/)
 
 A schema-driven framework for authoring, packaging, and registering custom automation steps for workflow orchestration. Build type-safe, composable automation steps with declarative YAML manifests that compile to runtime-ready JSON definitions.
@@ -299,7 +299,7 @@ Administrators can audit these requirements **before** execution-plane dispatch.
 
 ### Prerequisites
 
-- **Python 3.12+**
+- **Python 3.12–3.14**
 - **PostgreSQL 15+** (for registry storage)
 - **Kubernetes/OpenShift cluster** (for container step execution)
 - **uv** (Python package manager): `pip install uv`
@@ -308,8 +308,8 @@ Administrators can audit these requirements **before** execution-plane dispatch.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/syntara-step-sdk.git
-cd syntara-step-sdk
+git clone https://github.com/syntara-orchestration/syntara-plugin-sdk.git
+cd syntara-plugin-sdk
 
 # Install the SDK package
 pip install -e ./sdk-python
@@ -329,8 +329,8 @@ uv run pytest tests/registry/test_postgres_registry.py
 
 ### Testing and quality checks
 
-CI runs the full test suite and pre-commit checks (Ruff linting and mypy type checking) on
-Python 3.12.
+CI runs the full test suite on Python 3.12, 3.13, and 3.14, plus pre-commit checks
+(Ruff linting and mypy type checking) on Python 3.12.
 Run the same checks locally from the repository root:
 
 ```bash

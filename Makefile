@@ -1,7 +1,7 @@
 .PHONY: install test lint typecheck check
 
 install:
-	uv sync --locked --all-extras
+	uv sync --locked --group dev
 
 test:
 	uv run --no-sync --no-build pytest
