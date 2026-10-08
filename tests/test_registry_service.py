@@ -17,7 +17,7 @@ from tests.registry.service import (
 TESTS_DIR = Path(__file__).resolve().parent
 
 
-@pytest.fixture
+@pytest.fixture()
 def session():
     engine = create_engine(
         "sqlite://",
@@ -84,6 +84,7 @@ def test_oci_registration_rejects_non_step_artifact(session: Session) -> None:
 
 def test_same_step_name_coexists_across_namespaces(session: Session) -> None:
     """This legacy prototype key permits the same name in different namespaces."""
+
     manifest = load_manifest(TESTS_DIR / "fixtures" / "steps" / "http_request" / "manifest.yaml")
     service = RegistryService(session)
 

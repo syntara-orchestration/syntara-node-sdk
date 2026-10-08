@@ -85,6 +85,7 @@ def test_build_writes_oci_manifest_with_plugin_layer(tmp_path: Path) -> None:
 
 def test_artifact_ref_does_not_overwrite_runtime_image(tmp_path: Path) -> None:
     """The packaged plugin artifact and the runtime image are distinct refs."""
+
     plugin_path = _plugin_source(tmp_path)
     output = tmp_path / "oci-layout"
 
@@ -130,6 +131,7 @@ def test_build_requires_an_artifact_reference(tmp_path: Path) -> None:
 )
 def test_init_rejects_paths_escaping_the_base(tmp_path: Path, hostile: Path) -> None:
     """--path may be model-generated in an agentic workflow; it must stay in-tree."""
+
     with pytest.raises(ValueError, match="escapes the base directory"):
         init_step(hostile, "custom_step", 3, RUNTIME_IMAGE, base_dir=tmp_path)
 

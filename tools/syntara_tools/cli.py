@@ -62,11 +62,13 @@ def _manifest(name: str, tier: int, image: str) -> dict[str, Any]:
 
 def _step_class_name(name: str) -> str:
     """Derive the BaseStep subclass name the entrypoint will reference."""
+
     return "".join(part.title() for part in name.split("_")) + "Step"
 
 
 def _step_module(class_name: str) -> str:
     """Scaffold a BaseStep subclass matching the declared entrypoint."""
+
     return f'''"""Step implementation. Loaded by the runtime via spec.execution.entrypoint."""
 
 from pydantic import BaseModel
@@ -101,6 +103,7 @@ def _resolve_within(candidate: Path, base: Path) -> Path:
     like ``../../etc`` would otherwise write files outside the project, so the
     resolved target must stay inside the base directory.
     """
+
     base = base.resolve()
     target = (base / candidate).resolve()
     if target != base and base not in target.parents:
@@ -116,6 +119,7 @@ def init_step(
     base_dir: Path | None = None,
 ) -> None:
     """Create a Tier 2 script package or Tier 3 image package."""
+
     if not _STEP_NAME.fullmatch(name):
         raise ValueError("name must be lowercase snake_case")
     if tier not in {2, 3}:
@@ -155,6 +159,7 @@ def init_step(
 
 def _oci_manifest(plugin_path: Path, image_ref: str) -> tuple[dict[str, Any], bytes]:
     """Return an OCI manifest and its plugin metadata layer contents."""
+
     # The artifact ref is where the plugin is published. It is unrelated to
     # spec.execution.image, which names the runtime the step executes in.
     if not isinstance(image_ref, str) or not image_ref:
@@ -206,6 +211,7 @@ def _oci_manifest(plugin_path: Path, image_ref: str) -> tuple[dict[str, Any], by
 
 def build_plugin(plugin_path: Path, output: Path, image_ref: str) -> Path:
     """Build one root plugin artifact containing all explicitly targeted steps."""
+
     oci_manifest, layer_contents = _oci_manifest(plugin_path, image_ref)
     encoded = json.dumps(oci_manifest, indent=2, sort_keys=True).encode()
 
@@ -257,6 +263,7 @@ def register_with_syntara(
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
     """Register a published OCI plugin in Syntara's plugin catalog."""
+
     owns_client = client is None
     http_client = client or httpx.Client(timeout=10.0)
     url = f"{api_url.rstrip('/')}/api/v1/plugins"
@@ -290,6 +297,7 @@ def push_plugin(
     registration_client: httpx.Client | None = None,
 ) -> str:
     """Publish one plugin artifact and optionally register the plugin release."""
+
     oci_manifest, layer_contents = _oci_manifest(plugin_path, image_ref)
     owns_client = registry_client is None
     client = registry_client or OCIRegistryClient()

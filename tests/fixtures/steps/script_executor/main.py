@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Script Executor Step - Reference Implementation
+"""
+Script Executor Step - Reference Implementation
 
 Executes Python 3.12 or Bash 5.2 scripts in an isolated container.
 Demonstrates the language-agnostic execution contract:
@@ -36,7 +37,8 @@ def execute_python_script(
     env_vars: dict[str, str],
     working_dir: str
 ) -> dict[str, Any]:
-    """Execute Python script with named arguments.
+    """
+    Execute Python script with named arguments.
 
     Expects script to define a main() function that accepts kwargs.
     """
@@ -45,9 +47,9 @@ def execute_python_script(
     exec_env.update(env_vars)
 
     # Create temporary script file
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
         # Wrap user script to handle arguments and capture output
-        wrapper = f"""
+        wrapper = f'''
 import json
 import sys
 
@@ -83,7 +85,7 @@ except Exception as e:
         "exit_code": 1
     }}))
     sys.exit(1)
-"""
+'''
         f.write(wrapper)
         script_path = f.name
 
@@ -130,7 +132,7 @@ except Exception as e:
             "Result": None,
             "StatusCode": 255,
             "StatusMessage": "Script execution error",
-            "ErrorMessage": f"{type(e).__name__}: {e!s}"
+            "ErrorMessage": f"{type(e).__name__}: {str(e)}"
         }
 
     finally:
@@ -143,14 +145,15 @@ def execute_bash_script(
     env_vars: dict[str, str],
     working_dir: str
 ) -> dict[str, Any]:
-    """Execute Bash script with positional arguments.
+    """
+    Execute Bash script with positional arguments.
     """
     # Inject environment variables
     exec_env = os.environ.copy()
     exec_env.update(env_vars)
 
     # Create temporary script file
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
         f.write("#!/bin/bash\n")
         f.write("set -euo pipefail\n")  # Strict error handling
         f.write(script)
@@ -195,7 +198,7 @@ def execute_bash_script(
             "Result": None,
             "StatusCode": 255,
             "StatusMessage": "Script execution error",
-            "ErrorMessage": f"{type(e).__name__}: {e!s}"
+            "ErrorMessage": f"{type(e).__name__}: {str(e)}"
         }
 
     finally:
@@ -215,14 +218,15 @@ def execute_script(inputs: dict[str, Any]) -> dict[str, Any]:
 
     if language == "python3":
         return execute_python_script(script, arguments, env_vars, working_dir)
-    if language == "bash":
+    elif language == "bash":
         return execute_bash_script(script, arguments, env_vars, working_dir)
-    return {
-        "Result": None,
-        "StatusCode": 1,
-        "StatusMessage": "Unsupported language",
-        "ErrorMessage": f"Language '{language}' not supported. Use 'python3' or 'bash'."
-    }
+    else:
+        return {
+            "Result": None,
+            "StatusCode": 1,
+            "StatusMessage": "Unsupported language",
+            "ErrorMessage": f"Language '{language}' not supported. Use 'python3' or 'bash'."
+        }
 
 
 class ScriptExecutorInput(BaseModel):
@@ -276,6 +280,7 @@ class ScriptExecutorStep(TaskStep[ScriptExecutorInput, ScriptExecutorOutput]):
 
 def main() -> int:
     """Local convenience runner; the platform loads ScriptExecutorStep directly."""
+
     raw = json.load(sys.stdin)
     output = ScriptExecutorStep().execute_raw(raw)
     print(json.dumps(output.model_dump(), indent=2))

@@ -94,7 +94,7 @@ def load_common_definitions(schemas_root: Path | None = None) -> dict[str, Any]:
             "Pass schemas_root or preserve the SDK repository layout."
         )
     with schema_path.open(encoding="utf-8") as stream:
-        return cast("dict[str, Any]", json.load(stream))
+        return cast(dict[str, Any], json.load(stream))
 
 
 def build_validator(
@@ -171,6 +171,7 @@ def validate_plugin_metadata_payload(payload: object, schemas_root: Path | None 
     with the root identity and with the deterministic digest used at publish
     time.
     """
+
     if not isinstance(payload, dict):
         return ["plugin metadata payload must be a mapping"]
     plugin = payload.get("plugin")
