@@ -334,10 +334,12 @@ Python 3.12.
 Run the same checks locally from the repository root:
 
 ```bash
-uv sync --locked --all-extras
-uv run --no-sync --no-build pytest
-uv run --no-sync --no-build pre-commit run --all-files
+make install
+make test
+make check
 ```
+
+Use `make lint` or `make typecheck` to run either pre-commit hook independently.
 
 ### Project Structure
 
