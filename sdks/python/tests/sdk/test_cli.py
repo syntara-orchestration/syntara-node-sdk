@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from syntara_plugin.sdk.cli import main
 
@@ -88,3 +89,95 @@ def test_validate_rejects_malformed_or_repeated_image_binding(tmp_path: Path, ca
         == 2
     )
     assert "repeats logical image ID" in capsys.readouterr().err
+
+
+def test_build_reports_the_immutable_oci_artifact_metadata(tmp_path: Path, capsys) -> None:
+    """Build uses the public compiler and OCI builder without registry I/O."""
+    workspace = tmp_path / "status-tools"
+    assert main(["init", str(workspace)]) == 0
+    capsys.readouterr()
+
+    assert main(["build", str(workspace / "plugin.yaml"), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["compiledDigest"].startswith("sha256:")
+    assert payload["artifactDigest"].startswith("sha256:")
+    assert [blob["name"] for blob in payload["blobs"]] == [
+        "config",
+        "pluginDescriptor",
+        "contentBundle",
+    ]
+
+
+def test_publish_requires_password_stdin(tmp_path: Path, capsys) -> None:
+    """The command never accepts a registry password as an argument."""
+    workspace = tmp_path / "status-tools"
+    assert main(["init", str(workspace)]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "publish",
+                str(workspace / "plugin.yaml"),
+                "--registry-origin",
+                "https://registry.example.test",
+                "--repository",
+                "acme/status-tools",
+                "--channel",
+                "0.1.0",
+                "--username",
+                "publisher",
+            ]
+        )
+        == 2
+    )
+    assert "requires --password-stdin" in capsys.readouterr().err
+
+
+def test_publish_reports_immutable_reference(tmp_path: Path, capsys, monkeypatch) -> None:
+    """Publication accepts only an explicit destination and stdin credential."""
+    workspace = tmp_path / "status-tools"
+    assert main(["init", str(workspace)]) == 0
+    capsys.readouterr()
+
+    published: dict[str, object] = {}
+
+    class Publisher:
+        def __init__(self, target, *, credentials) -> None:
+            published["target"] = target
+            published["credentials"] = credentials
+
+        def publish(self, artifact):
+            published["artifact"] = artifact
+            return SimpleNamespace(
+                channel="0.1.0",
+                immutable_reference=f"acme/status-tools@{artifact.digest}",
+                repository="acme/status-tools",
+            )
+
+    monkeypatch.setattr("syntara_plugin.sdk.cli.PluginArtifactPublisher", Publisher)
+    monkeypatch.setattr("sys.stdin.read", lambda: "not-printed\n")
+
+    assert (
+        main(
+            [
+                "publish",
+                str(workspace / "plugin.yaml"),
+                "--registry-origin",
+                "https://registry.example.test",
+                "--repository",
+                "acme/status-tools",
+                "--channel",
+                "0.1.0",
+                "--username",
+                "publisher",
+                "--password-stdin",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["immutableReference"] == f"acme/status-tools@{payload['artifactDigest']}"
+    assert published["credentials"].password == "not-printed"

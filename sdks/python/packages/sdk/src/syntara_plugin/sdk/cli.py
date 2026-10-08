@@ -1,8 +1,9 @@
-"""Small offline command-line adapter for the Syntara plugin authoring API.
+"""Developer-oriented command-line adapter for the Syntara plugin SDK.
 
-The CLI deliberately delegates every source interpretation to
-``compile_workspace``. It does not resolve image tags, build workload images,
-sign, publish, contact a registry, or store credentials.
+The CLI delegates every source interpretation to ``compile_workspace``. It can
+assemble and explicitly publish metadata OCI artifacts, but it never resolves
+workload-image tags, builds workload images, signs artifacts, discovers
+registries, or stores registry credentials.
 """
 
 from __future__ import annotations
@@ -14,7 +15,14 @@ import re
 import sys
 from typing import Sequence
 
+from .artifact import ArtifactBuildError, PluginArtifact, build_plugin_artifact
 from .authoring import BuildRequest, CompilationError, compile_workspace
+from .registry import (
+    CatalogIndexPublicationError,
+    PluginArtifactPublicationTarget,
+    PluginArtifactPublisher,
+    RegistryCredentials,
+)
 
 
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
@@ -29,6 +37,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _init_workspace(arguments)
     if arguments.command in {"validate", "inspect"}:
         return _compile_workspace(arguments)
+    if arguments.command == "build":
+        return _build_artifact(arguments)
+    if arguments.command == "publish":
+        return _publish_artifact(arguments)
     parser.error("a command is required")
     return 2
 
@@ -36,7 +48,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _parser() -> argparse.ArgumentParser:
     """Build the stable, dependency-free command surface."""
     parser = argparse.ArgumentParser(
-        prog="syntara-plugin", description="Author Syntara plugin workspaces offline."
+        prog="syntara-plugin", description="Author, build, and explicitly publish Syntara plugins."
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -52,6 +64,7 @@ def _parser() -> argparse.ArgumentParser:
     for command, help_text in (
         ("validate", "Compile and validate a plugin workspace."),
         ("inspect", "Print the canonical descriptor for a plugin workspace."),
+        ("build", "Build and describe an OCI plugin artifact without publishing it."),
     ):
         compile_command = commands.add_parser(command, help=help_text)
         compile_command.add_argument("manifest", type=Path, help="Path to plugin.yaml.")
@@ -65,6 +78,36 @@ def _parser() -> argparse.ArgumentParser:
         compile_command.add_argument(
             "--json", action="store_true", help="Print machine-readable output."
         )
+
+    publish = commands.add_parser(
+        "publish",
+        help="Build and publish one metadata OCI plugin artifact to an explicit repository.",
+    )
+    publish.add_argument("manifest", type=Path, help="Path to plugin.yaml.")
+    publish.add_argument(
+        "--image-binding",
+        action="append",
+        default=[],
+        metavar="ID=REPOSITORY@sha256:DIGEST",
+        help="Immutable custom-workload image binding; repeat for each logical image ID.",
+    )
+    publish.add_argument(
+        "--registry-origin", required=True, help="Registry origin, including scheme."
+    )
+    publish.add_argument("--repository", required=True, help="Destination OCI repository path.")
+    publish.add_argument("--channel", required=True, help="Destination OCI tag.")
+    publish.add_argument("--username", required=True, help="Registry username.")
+    publish.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Read the registry password from standard input; required for publication.",
+    )
+    publish.add_argument(
+        "--allow-insecure-loopback-http",
+        action="store_true",
+        help="Allow HTTP only for localhost or 127.0.0.1 developer registries.",
+    )
+    publish.add_argument("--json", action="store_true", help="Print machine-readable output.")
     return parser
 
 
@@ -150,6 +193,107 @@ def _compile_workspace(arguments: argparse.Namespace) -> int:
     else:
         print(f"Valid: {arguments.manifest} ({result.digest}, {len(result.assets)} bundled assets)")
     return 0
+
+
+def _build_artifact(arguments: argparse.Namespace):
+    """Build through the public SDK API and print OCI metadata without I/O."""
+    try:
+        result = compile_workspace(
+            BuildRequest(
+                arguments.manifest.expanduser(),
+                image_bindings=_parse_image_bindings(arguments.image_binding),
+            )
+        )
+        artifact = build_plugin_artifact(result)
+    except (ArtifactBuildError, CompilationError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    payload = _artifact_payload(result.digest, artifact)
+    if arguments.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"Built: {arguments.manifest} ({artifact.digest})")
+        for name, blob in (
+            ("config", artifact.config),
+            ("pluginDescriptor", artifact.plugin_manifest),
+            ("contentBundle", artifact.content_bundle),
+        ):
+            descriptor = blob.descriptor
+            print(
+                f"  {name}: {descriptor.digest} ({descriptor.media_type}, {descriptor.size} bytes)"
+            )
+    return 0
+
+
+def _publish_artifact(arguments: argparse.Namespace) -> int:
+    """Build and publish to one explicit registry destination without persistence."""
+    if not arguments.password_stdin:
+        print("error: publish requires --password-stdin", file=sys.stderr)
+        return 2
+    password = sys.stdin.read().rstrip("\r\n")
+    if not password:
+        print("error: --password-stdin received no password", file=sys.stderr)
+        return 2
+    try:
+        result = compile_workspace(
+            BuildRequest(
+                arguments.manifest.expanduser(),
+                image_bindings=_parse_image_bindings(arguments.image_binding),
+            )
+        )
+        artifact = build_plugin_artifact(result)
+        publication = PluginArtifactPublisher(
+            PluginArtifactPublicationTarget(
+                registry_origin=arguments.registry_origin,
+                repository=arguments.repository,
+                channel=arguments.channel,
+                allow_insecure_loopback_http=arguments.allow_insecure_loopback_http,
+            ),
+            credentials=RegistryCredentials(arguments.username, password),
+        ).publish(artifact)
+    except (
+        ArtifactBuildError,
+        CatalogIndexPublicationError,
+        CompilationError,
+        ValueError,
+    ) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    payload = {
+        **_artifact_payload(result.digest, artifact),
+        "channel": publication.channel,
+        "immutableReference": publication.immutable_reference,
+        "ok": True,
+        "repository": publication.repository,
+    }
+    if arguments.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"Published: {publication.immutable_reference}")
+        print(f"Channel: {publication.repository}:{publication.channel}")
+    return 0
+
+
+def _artifact_payload(compiled_digest: str, artifact: PluginArtifact) -> dict[str, object]:
+    """Return safe, serializable OCI metadata for CLI build and publish results."""
+    blobs = []
+    for name, blob in (
+        ("config", artifact.config),
+        ("pluginDescriptor", artifact.plugin_manifest),
+        ("contentBundle", artifact.content_bundle),
+    ):
+        descriptor = blob.descriptor
+        blobs.append(
+            {
+                "digest": descriptor.digest,
+                "mediaType": descriptor.media_type,
+                "name": name,
+                "size": descriptor.size,
+            }
+        )
+    return {"artifactDigest": artifact.digest, "blobs": blobs, "compiledDigest": compiled_digest}
 
 
 def _parse_image_bindings(raw_bindings: Sequence[str]) -> dict[str, str]:

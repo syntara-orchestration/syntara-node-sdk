@@ -71,8 +71,15 @@ The `syntara-plugin-sdk` distribution installs the `syntara-plugin` command:
 syntara-plugin init ./my-plugin --namespace acme
 syntara-plugin validate ./my-plugin/plugin.yaml --json
 syntara-plugin inspect ./my-plugin/plugin.yaml > descriptor.json
+syntara-plugin build ./my-plugin/plugin.yaml --json
+printf '%s' "$REGISTRY_PASSWORD" | syntara-plugin publish ./my-plugin/plugin.yaml \
+  --registry-origin https://registry.example.test \
+  --repository acme/plugins/my-plugin --channel 0.1.0 \
+  --username publisher --password-stdin
 ```
 
-It is a thin adapter over `compile_workspace()`: it has no registry, image
-engine, signer, network, or credential behavior. It can also be invoked from a
-source checkout with `python -m syntara_plugin.sdk.cli`.
+It is a thin adapter over the public compiler, OCI builder, and explicit
+registry publisher. `build` is offline and reports the OCI artifact metadata.
+`publish` requires an explicit registry origin, repository, channel, username,
+and `--password-stdin`; it never stores credentials. It can also be invoked
+from a source checkout with `python -m syntara_plugin.sdk.cli`.
