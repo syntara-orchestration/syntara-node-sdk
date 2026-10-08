@@ -16,6 +16,11 @@ import sys
 from typing import Sequence
 
 from .artifact import ArtifactBuildError, PluginArtifact, build_plugin_artifact
+from .artifact_archive import (
+    ArtifactArchiveError,
+    read_plugin_artifact_archive,
+    write_plugin_artifact_archive,
+)
 from .authoring import BuildRequest, CompilationError, compile_workspace
 from .registry import (
     CatalogIndexPublicationError,
@@ -35,8 +40,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.command == "init":
         return _init_workspace(arguments)
-    if arguments.command in {"validate", "inspect"}:
+    if arguments.command == "validate":
         return _compile_workspace(arguments)
+    if arguments.command == "inspect":
+        return _inspect(arguments)
     if arguments.command == "build":
         return _build_artifact(arguments)
     if arguments.command == "publish":
@@ -63,8 +70,8 @@ def _parser() -> argparse.ArgumentParser:
 
     for command, help_text in (
         ("validate", "Compile and validate a plugin workspace."),
-        ("inspect", "Print the canonical descriptor for a plugin workspace."),
-        ("build", "Build and describe an OCI plugin artifact without publishing it."),
+        ("inspect", "Inspect a plugin workspace or verified OCI plugin archive."),
+        ("build", "Build and write a portable OCI plugin archive without publishing it."),
     ):
         compile_command = commands.add_parser(command, help=help_text)
         compile_command.add_argument("manifest", type=Path, help="Path to plugin.yaml.")
@@ -78,19 +85,16 @@ def _parser() -> argparse.ArgumentParser:
         compile_command.add_argument(
             "--json", action="store_true", help="Print machine-readable output."
         )
+        if command == "build":
+            compile_command.add_argument(
+                "--output", type=Path, required=True, help="New OCI-layout .oci.tar output file."
+            )
 
     publish = commands.add_parser(
         "publish",
-        help="Build and publish one metadata OCI plugin artifact to an explicit repository.",
+        help="Publish one prebuilt OCI plugin archive to an explicit repository.",
     )
-    publish.add_argument("manifest", type=Path, help="Path to plugin.yaml.")
-    publish.add_argument(
-        "--image-binding",
-        action="append",
-        default=[],
-        metavar="ID=REPOSITORY@sha256:DIGEST",
-        help="Immutable custom-workload image binding; repeat for each logical image ID.",
-    )
+    publish.add_argument("artifact", type=Path, help="OCI-layout .oci.tar file produced by build.")
     publish.add_argument(
         "--registry-origin", required=True, help="Registry origin, including scheme."
     )
@@ -195,8 +199,8 @@ def _compile_workspace(arguments: argparse.Namespace) -> int:
     return 0
 
 
-def _build_artifact(arguments: argparse.Namespace):
-    """Build through the public SDK API and print OCI metadata without I/O."""
+def _build_artifact(arguments: argparse.Namespace) -> int:
+    """Build a source workspace into one reviewable, portable OCI archive."""
     try:
         result = compile_workspace(
             BuildRequest(
@@ -205,15 +209,17 @@ def _build_artifact(arguments: argparse.Namespace):
             )
         )
         artifact = build_plugin_artifact(result)
-    except (ArtifactBuildError, CompilationError, ValueError) as error:
+        output = write_plugin_artifact_archive(artifact, arguments.output)
+    except (ArtifactArchiveError, ArtifactBuildError, CompilationError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
-    payload = _artifact_payload(result.digest, artifact)
+    payload = {**_artifact_payload(result.digest, artifact), "archive": str(output)}
     if arguments.json:
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     else:
         print(f"Built: {arguments.manifest} ({artifact.digest})")
+        print(f"Archive: {output}")
         for name, blob in (
             ("config", artifact.config),
             ("pluginDescriptor", artifact.plugin_manifest),
@@ -227,7 +233,7 @@ def _build_artifact(arguments: argparse.Namespace):
 
 
 def _publish_artifact(arguments: argparse.Namespace) -> int:
-    """Build and publish to one explicit registry destination without persistence."""
+    """Publish exactly one verified portable archive to an explicit destination."""
     if not arguments.password_stdin:
         print("error: publish requires --password-stdin", file=sys.stderr)
         return 2
@@ -236,13 +242,7 @@ def _publish_artifact(arguments: argparse.Namespace) -> int:
         print("error: --password-stdin received no password", file=sys.stderr)
         return 2
     try:
-        result = compile_workspace(
-            BuildRequest(
-                arguments.manifest.expanduser(),
-                image_bindings=_parse_image_bindings(arguments.image_binding),
-            )
-        )
-        artifact = build_plugin_artifact(result)
+        artifact = read_plugin_artifact_archive(arguments.artifact)
         publication = PluginArtifactPublisher(
             PluginArtifactPublicationTarget(
                 registry_origin=arguments.registry_origin,
@@ -253,16 +253,16 @@ def _publish_artifact(arguments: argparse.Namespace) -> int:
             credentials=RegistryCredentials(arguments.username, password),
         ).publish(artifact)
     except (
-        ArtifactBuildError,
+        ArtifactArchiveError,
         CatalogIndexPublicationError,
-        CompilationError,
         ValueError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
     payload = {
-        **_artifact_payload(result.digest, artifact),
+        **_artifact_payload(artifact.plugin_manifest.descriptor.digest, artifact),
+        "archive": str(arguments.artifact),
         "channel": publication.channel,
         "immutableReference": publication.immutable_reference,
         "ok": True,
@@ -274,6 +274,26 @@ def _publish_artifact(arguments: argparse.Namespace) -> int:
         print(f"Published: {publication.immutable_reference}")
         print(f"Channel: {publication.repository}:{publication.channel}")
     return 0
+
+
+def _inspect(arguments: argparse.Namespace) -> int:
+    """Inspect either source metadata or a verified portable artifact archive."""
+    if arguments.manifest.name.endswith(".oci.tar"):
+        if arguments.image_binding:
+            print(
+                "error: --image-binding applies only when inspecting a source plugin manifest",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            artifact = read_plugin_artifact_archive(arguments.manifest)
+        except ArtifactArchiveError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        payload = _artifact_payload(artifact.plugin_manifest.descriptor.digest, artifact)
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+    return _compile_workspace(arguments)
 
 
 def _artifact_payload(compiled_digest: str, artifact: PluginArtifact) -> dict[str, object]:

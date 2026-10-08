@@ -80,15 +80,19 @@ The command supports:
 syntara-plugin init ./my-plugin --namespace acme
 syntara-plugin validate ./my-plugin/plugin.yaml --json
 syntara-plugin inspect ./my-plugin/plugin.yaml > descriptor.json
-syntara-plugin build ./my-plugin/plugin.yaml --json
-printf '%s' "$REGISTRY_PASSWORD" | syntara-plugin publish ./my-plugin/plugin.yaml \
+syntara-plugin build ./my-plugin/plugin.yaml --output ./dist/my-plugin.oci.tar --json
+syntara-plugin inspect ./dist/my-plugin.oci.tar
+printf '%s' "$REGISTRY_PASSWORD" | syntara-plugin publish ./dist/my-plugin.oci.tar \
   --registry-origin https://registry.example.test \
   --repository acme/plugins/my-plugin --channel 0.1.0 \
   --username publisher --password-stdin
 ```
 
-It is a thin adapter over the public compiler, OCI builder, and explicit
-registry publisher. `build` is offline and reports the OCI artifact metadata.
-`publish` requires an explicit registry origin, repository, channel, username,
-and `--password-stdin`; it never stores credentials. It can also be invoked
-from a source checkout with `python -m syntara_plugin.sdk.cli`.
+It is a thin adapter over the public compiler, OCI builder, archive verifier,
+and explicit registry publisher. `build` is offline: it writes one deterministic
+OCI-layout archive and reports its OCI metadata. Archive `inspect` verifies the
+archive before reporting it, and `publish` uploads those exact verified bytes;
+neither operation recompiles source. `publish` requires an explicit registry
+origin, repository, channel (OCI tag), username, and `--password-stdin`; it
+never stores credentials. It can also be invoked from a source checkout with
+`python -m syntara_plugin.sdk.cli`.

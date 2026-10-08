@@ -11,6 +11,12 @@ from .artifact import (
     PluginArtifact,
     build_plugin_artifact,
 )
+from .artifact_archive import (
+    OCI_LAYOUT_VERSION,
+    ArtifactArchiveError,
+    read_plugin_artifact_archive,
+    write_plugin_artifact_archive,
+)
 from .catalog import (
     OCI_CATALOG_INDEX_ARTIFACT_TYPE,
     OCI_CATALOG_INDEX_CONFIG_MEDIA_TYPE,
@@ -49,6 +55,7 @@ from .authoring import (
 
 __all__ = [
     "ArtifactBuildError",
+    "ArtifactArchiveError",
     "BuildRequest",
     "CatalogIndexArtifact",
     "CatalogIndexArtifactBuildError",
@@ -68,6 +75,7 @@ __all__ = [
     "OCI_CONFIG_MEDIA_TYPE",
     "OCI_CONTENT_BUNDLE_MEDIA_TYPE",
     "OCI_IMAGE_MANIFEST_MEDIA_TYPE",
+    "OCI_LAYOUT_VERSION",
     "OCI_PLUGIN_MANIFEST_MEDIA_TYPE",
     "OciBlob",
     "OciDescriptor",
@@ -88,4 +96,6 @@ __all__ = [
     "compile_model",
     "compile_workspace",
     "load_bundle",
+    "read_plugin_artifact_archive",
+    "write_plugin_artifact_archive",
 ]

@@ -82,22 +82,25 @@ build and publication operations:
 syntara-plugin init ./my-plugin --namespace acme
 syntara-plugin validate ./my-plugin/plugin.yaml
 syntara-plugin inspect ./my-plugin/plugin.yaml > descriptor.json
-syntara-plugin build ./my-plugin/plugin.yaml --json
-printf '%s' "$REGISTRY_PASSWORD" | syntara-plugin publish ./my-plugin/plugin.yaml \
+syntara-plugin build ./my-plugin/plugin.yaml --output ./dist/my-plugin.oci.tar --json
+syntara-plugin inspect ./dist/my-plugin.oci.tar
+printf '%s' "$REGISTRY_PASSWORD" | syntara-plugin publish ./dist/my-plugin.oci.tar \
   --registry-origin https://registry.example.test \
   --repository acme/plugins/my-plugin --channel 0.1.0 \
   --username publisher --password-stdin
 ```
 
 `init` never overwrites an existing path. `validate` reports the compiler's
-stable diagnostics, while `inspect` writes the exact canonical descriptor that
-the artifact builder would use. `build` performs no network operation and
-reports the config, descriptor, and content-bundle digests of the resulting
-OCI plugin artifact. `publish` requires every destination coordinate
-explicitly, reads a password only through standard input, retains it only for
-that process, and prints the immutable result reference. It never resolves an
-image tag, builds a workload image, signs an artifact, discovers repositories,
-or stores credentials. HTTP publication requires the explicit
+stable diagnostics, while source `inspect` writes the exact canonical descriptor
+that the artifact builder would use. `build` performs no network operation and
+writes one deterministic, uncompressed OCI-layout archive. Archive `inspect`
+verifies its complete OCI blob graph before reporting the contents. `publish`
+uploads that exact verified archive, rather than recompiling the source, and
+requires every destination coordinate explicitly. It reads a password only
+through standard input, retains it only for that process, and prints the
+immutable result reference. It never resolves an image tag, builds a workload
+image, signs an artifact, discovers repositories, or stores credentials. HTTP
+publication requires the explicit
 `--allow-insecure-loopback-http` switch and is restricted by the SDK to local
 loopback addresses.
 
@@ -152,7 +155,7 @@ print(publication.immutable_reference)
 ```
 
 The catalog entry uses `plugin_publication.manifest_digest`, never its mutable
-channel. On an index update, the authoring or CI workflow must also build the
+channel (OCI tag). On an index update, the authoring or CI workflow must also build the
 next catalog document with the accepted predecessor digest in
 `metadata.previousIndexDigest`; the publisher intentionally does not read or
 guess it.

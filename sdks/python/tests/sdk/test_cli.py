@@ -36,11 +36,48 @@ def test_inspect_prints_the_canonical_descriptor_for_the_generated_workspace(
     workspace = tmp_path / "status-tools"
     assert main(["init", str(workspace)]) == 0
     capsys.readouterr()
-
     assert main(["inspect", str(workspace / "plugin.yaml")]) == 0
     descriptor = json.loads(capsys.readouterr().out)
     assert descriptor["metadata"]["name"] == "status-tools"
     assert descriptor["spec"]["targets"][0]["runtime"]["driver"] == "http.v1"
+
+
+def test_inspect_reads_the_verified_metadata_from_a_built_archive(tmp_path: Path, capsys) -> None:
+    """Archive inspection does not need the source workspace to still exist."""
+    workspace = tmp_path / "status-tools"
+    archive = tmp_path / "status-tools.oci.tar"
+    assert main(["init", str(workspace)]) == 0
+    capsys.readouterr()
+    assert main(["build", str(workspace / "plugin.yaml"), "--output", str(archive)]) == 0
+    capsys.readouterr()
+
+    assert main(["inspect", str(archive)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["artifactDigest"].startswith("sha256:")
+    assert payload["compiledDigest"].startswith("sha256:")
+
+
+def test_inspect_rejects_source_only_image_bindings_for_an_archive(tmp_path: Path, capsys) -> None:
+    """Archive inspection cannot silently ignore an option that affects source compilation."""
+    workspace = tmp_path / "status-tools"
+    archive = tmp_path / "status-tools.oci.tar"
+    assert main(["init", str(workspace)]) == 0
+    capsys.readouterr()
+    assert main(["build", str(workspace / "plugin.yaml"), "--output", str(archive)]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "inspect",
+                str(archive),
+                "--image-binding",
+                "workload=quay.io/acme/test@sha256:" + "a" * 64,
+            ]
+        )
+        == 2
+    )
+    assert "applies only" in capsys.readouterr().err
 
 
 def test_init_refuses_to_overwrite_an_existing_path(tmp_path: Path, capsys) -> None:
@@ -97,7 +134,8 @@ def test_build_reports_the_immutable_oci_artifact_metadata(tmp_path: Path, capsy
     assert main(["init", str(workspace)]) == 0
     capsys.readouterr()
 
-    assert main(["build", str(workspace / "plugin.yaml"), "--json"]) == 0
+    archive = tmp_path / "status-tools.oci.tar"
+    assert main(["build", str(workspace / "plugin.yaml"), "--output", str(archive), "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["compiledDigest"].startswith("sha256:")
     assert payload["artifactDigest"].startswith("sha256:")
@@ -106,6 +144,8 @@ def test_build_reports_the_immutable_oci_artifact_metadata(tmp_path: Path, capsy
         "pluginDescriptor",
         "contentBundle",
     ]
+    assert payload["archive"] == str(archive)
+    assert archive.is_file()
 
 
 def test_publish_requires_password_stdin(tmp_path: Path, capsys) -> None:
@@ -113,12 +153,15 @@ def test_publish_requires_password_stdin(tmp_path: Path, capsys) -> None:
     workspace = tmp_path / "status-tools"
     assert main(["init", str(workspace)]) == 0
     capsys.readouterr()
+    archive = tmp_path / "status-tools.oci.tar"
+    assert main(["build", str(workspace / "plugin.yaml"), "--output", str(archive)]) == 0
+    capsys.readouterr()
 
     assert (
         main(
             [
                 "publish",
-                str(workspace / "plugin.yaml"),
+                str(archive),
                 "--registry-origin",
                 "https://registry.example.test",
                 "--repository",
@@ -138,6 +181,9 @@ def test_publish_reports_immutable_reference(tmp_path: Path, capsys, monkeypatch
     """Publication accepts only an explicit destination and stdin credential."""
     workspace = tmp_path / "status-tools"
     assert main(["init", str(workspace)]) == 0
+    capsys.readouterr()
+    archive = tmp_path / "status-tools.oci.tar"
+    assert main(["build", str(workspace / "plugin.yaml"), "--output", str(archive)]) == 0
     capsys.readouterr()
 
     published: dict[str, object] = {}
@@ -162,7 +208,7 @@ def test_publish_reports_immutable_reference(tmp_path: Path, capsys, monkeypatch
         main(
             [
                 "publish",
-                str(workspace / "plugin.yaml"),
+                str(archive),
                 "--registry-origin",
                 "https://registry.example.test",
                 "--repository",

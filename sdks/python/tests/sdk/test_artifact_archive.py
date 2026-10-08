@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+from io import BytesIO
+from pathlib import Path
+import tarfile
+
+import pytest
+
+from syntara_plugin.sdk import (
+    ArtifactArchiveError,
+    BuildRequest,
+    build_plugin_artifact,
+    compile_workspace,
+    read_plugin_artifact_archive,
+    write_plugin_artifact_archive,
+)
+from syntara_plugin.sdk.cli import main
+
+
+def _artifact(tmp_path: Path):
+    """Create a minimal public authoring workspace and assemble its artifact."""
+    workspace = tmp_path / "status-tools"
+    assert main(["init", str(workspace)]) == 0
+    return build_plugin_artifact(compile_workspace(BuildRequest(workspace / "plugin.yaml")))
+
+
+def test_archive_round_trip_is_deterministic_and_preserves_the_artifact(tmp_path: Path) -> None:
+    """A build archive can be transported without changing any OCI bytes."""
+    artifact = _artifact(tmp_path)
+    first = tmp_path / "first.oci.tar"
+    second = tmp_path / "second.oci.tar"
+
+    write_plugin_artifact_archive(artifact, first)
+    write_plugin_artifact_archive(artifact, second)
+
+    assert first.read_bytes() == second.read_bytes()
+    assert read_plugin_artifact_archive(first) == artifact
+
+
+def test_archive_reader_rejects_a_blob_whose_content_does_not_match_its_digest(
+    tmp_path: Path,
+) -> None:
+    """Publication never uploads an archive whose declared OCI content was altered."""
+    artifact = _artifact(tmp_path)
+    original = tmp_path / "original.oci.tar"
+    altered = tmp_path / "altered.oci.tar"
+    write_plugin_artifact_archive(artifact, original)
+
+    with tarfile.open(original, mode="r:") as source, tarfile.open(altered, mode="x") as target:
+        for member in source.getmembers():
+            payload_handle = source.extractfile(member)
+            assert payload_handle is not None
+            payload = payload_handle.read()
+            if (
+                member.name
+                == f"blobs/sha256/{artifact.content_bundle.descriptor.digest.split(':', 1)[1]}"
+            ):
+                payload = b"!" + payload[1:]
+            copied = tarfile.TarInfo(member.name)
+            copied.size = len(payload)
+            copied.mode = member.mode
+            copied.mtime = member.mtime
+            target.addfile(copied, BytesIO(payload))
+
+    with pytest.raises(ArtifactArchiveError, match="does not match its descriptor"):
+        read_plugin_artifact_archive(altered)
+
+
+def test_archive_writer_refuses_to_replace_a_previous_build(tmp_path: Path) -> None:
+    """An accidental second build cannot silently replace a reviewable artifact."""
+    artifact = _artifact(tmp_path)
+    output = tmp_path / "plugin.oci.tar"
+    write_plugin_artifact_archive(artifact, output)
+
+    with pytest.raises(ArtifactArchiveError, match="refusing to overwrite"):
+        write_plugin_artifact_archive(artifact, output)

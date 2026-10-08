@@ -1,0 +1,228 @@
+"""Portable, verified OCI-layout archives for Syntara plugin artifacts."""
+
+from __future__ import annotations
+
+from hashlib import sha256
+from io import BytesIO
+import json
+from pathlib import Path
+import tarfile
+from typing import Any, Mapping, cast
+
+from .artifact import (
+    OCI_ARTIFACT_TYPE,
+    OCI_CONFIG_MEDIA_TYPE,
+    OCI_CONTENT_BUNDLE_MEDIA_TYPE,
+    OCI_PLUGIN_MANIFEST_MEDIA_TYPE,
+    PluginArtifact,
+)
+from .oci import OCI_IMAGE_MANIFEST_MEDIA_TYPE, OciBlob, OciDescriptor, canonical_json_bytes
+
+
+OCI_LAYOUT_VERSION = "1.0.0"
+_MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+
+
+class ArtifactArchiveError(ValueError):
+    """Raised when a portable plugin archive is malformed or unsafe."""
+
+
+def write_plugin_artifact_archive(artifact: PluginArtifact, destination: Path) -> Path:
+    """Write one deterministic OCI-layout archive without overwriting a prior build."""
+    destination = destination.expanduser()
+    if destination.exists():
+        raise ArtifactArchiveError(
+            f"refusing to overwrite existing artifact archive: {destination}"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    manifest = _manifest(artifact.manifest.content)
+    index = {
+        "schemaVersion": 2,
+        "manifests": [
+            {
+                **artifact.manifest.descriptor.as_dict(),
+                "annotations": dict(manifest["annotations"]),
+            }
+        ],
+    }
+    blobs = (artifact.config, artifact.plugin_manifest, artifact.content_bundle, artifact.manifest)
+    with tarfile.open(destination, mode="x", format=tarfile.PAX_FORMAT) as archive:
+        _add_bytes(
+            archive, "oci-layout", canonical_json_bytes({"imageLayoutVersion": OCI_LAYOUT_VERSION})
+        )
+        _add_bytes(archive, "index.json", canonical_json_bytes(index))
+        for blob in sorted(blobs, key=lambda item: item.descriptor.digest):
+            _add_bytes(archive, _blob_path(blob.descriptor.digest), blob.content)
+    return destination
+
+
+def read_plugin_artifact_archive(source: Path) -> PluginArtifact:
+    """Read and fully verify one self-contained OCI-layout plugin archive."""
+    source = source.expanduser()
+    if not source.is_file():
+        raise ArtifactArchiveError(f"artifact archive does not exist: {source}")
+    if source.stat().st_size > _MAX_ARCHIVE_BYTES:
+        raise ArtifactArchiveError("artifact archive exceeds the 64 MiB safety limit")
+    try:
+        with tarfile.open(source, mode="r:") as archive:
+            members = archive.getmembers()
+            if any(
+                not member.isfile()
+                or member.name.startswith("/")
+                or ".." in Path(member.name).parts
+                for member in members
+            ):
+                raise ArtifactArchiveError("artifact archive contains an unsafe member")
+            entries = {member.name: _read_member(archive, member) for member in members}
+    except (tarfile.TarError, OSError) as error:
+        raise ArtifactArchiveError(
+            "artifact archive is not a readable uncompressed tar file"
+        ) from error
+    if len(entries) != len(members):
+        raise ArtifactArchiveError("artifact archive contains duplicate member names")
+
+    layout = _json_mapping(entries.get("oci-layout"), "oci-layout")
+    if layout != {"imageLayoutVersion": OCI_LAYOUT_VERSION}:
+        raise ArtifactArchiveError("artifact archive has an unsupported OCI layout version")
+    index = _json_mapping(entries.get("index.json"), "index.json")
+    manifests = index.get("manifests")
+    if not isinstance(manifests, list) or len(manifests) != 1:
+        raise ArtifactArchiveError("artifact archive index must contain exactly one manifest")
+    index_manifest_descriptor = _descriptor(manifests[0], "index manifest")
+    if index_manifest_descriptor.media_type != OCI_IMAGE_MANIFEST_MEDIA_TYPE:
+        raise ArtifactArchiveError("artifact archive index manifest has an invalid media type")
+    indexed_manifest = _blob(entries, index_manifest_descriptor)
+    manifest_document = _manifest(indexed_manifest.content)
+    if manifest_document.get("artifactType") != OCI_ARTIFACT_TYPE:
+        raise ArtifactArchiveError("artifact archive manifest has an unexpected artifact type")
+
+    config = _blob(entries, _descriptor(manifest_document.get("config"), "manifest config"))
+    layers = manifest_document.get("layers")
+    if not isinstance(layers, list) or len(layers) != 2:
+        raise ArtifactArchiveError("artifact archive manifest must contain exactly two layers")
+    descriptor = _blob(entries, _descriptor(layers[0], "plugin descriptor layer"))
+    bundle = _blob(entries, _descriptor(layers[1], "content bundle layer"))
+    if config.descriptor.media_type != OCI_CONFIG_MEDIA_TYPE:
+        raise ArtifactArchiveError("artifact archive config has an invalid media type")
+    if descriptor.descriptor.media_type != OCI_PLUGIN_MANIFEST_MEDIA_TYPE:
+        raise ArtifactArchiveError("artifact archive plugin descriptor has an invalid media type")
+    if bundle.descriptor.media_type != OCI_CONTENT_BUNDLE_MEDIA_TYPE:
+        raise ArtifactArchiveError("artifact archive content bundle has an invalid media type")
+
+    expected_paths = {
+        "oci-layout",
+        "index.json",
+        *(
+            _blob_path(blob.descriptor.digest)
+            for blob in (indexed_manifest, config, descriptor, bundle)
+        ),
+    }
+    if set(entries) != expected_paths:
+        raise ArtifactArchiveError("artifact archive contains unexpected or missing OCI members")
+    # OCI index annotations describe how the archive is presented; they are not
+    # part of the artifact manifest blob itself. Recreate the artifact's own
+    # descriptor so reading and writing is a lossless PluginArtifact round trip.
+    manifest = OciBlob.create(indexed_manifest.content, OCI_IMAGE_MANIFEST_MEDIA_TYPE)
+    return PluginArtifact(
+        config=config, plugin_manifest=descriptor, content_bundle=bundle, manifest=manifest
+    )
+
+
+def _add_bytes(archive: tarfile.TarFile, name: str, content: bytes) -> None:
+    member = tarfile.TarInfo(name=name)
+    member.size = len(content)
+    member.mode = 0o644
+    member.mtime = 0
+    member.uid = 0
+    member.gid = 0
+    member.uname = ""
+    member.gname = ""
+    archive.addfile(member, BytesIO(content))
+
+
+def _blob_path(digest: str) -> str:
+    algorithm, separator, value = digest.partition(":")
+    if (
+        algorithm != "sha256"
+        or not separator
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ArtifactArchiveError("OCI descriptor digest must be a lowercase SHA-256 digest")
+    return f"blobs/sha256/{value}"
+
+
+def _read_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> bytes:
+    extracted = archive.extractfile(member)
+    if extracted is None:
+        raise ArtifactArchiveError("artifact archive member cannot be read")
+    return extracted.read()
+
+
+def _json_mapping(content: bytes | None, label: str) -> Mapping[str, Any]:
+    if content is None:
+        raise ArtifactArchiveError(f"artifact archive is missing {label}")
+    try:
+        value = json.loads(content)
+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ArtifactArchiveError(f"artifact archive {label} is not valid JSON") from error
+    if not isinstance(value, Mapping):
+        raise ArtifactArchiveError(f"artifact archive {label} must be an object")
+    return cast(Mapping[str, Any], value)
+
+
+def _manifest(content: bytes) -> Mapping[str, Any]:
+    manifest = _json_mapping(content, "manifest")
+    if (
+        manifest.get("schemaVersion") != 2
+        or manifest.get("mediaType") != OCI_IMAGE_MANIFEST_MEDIA_TYPE
+    ):
+        raise ArtifactArchiveError("artifact archive manifest is not an OCI image manifest")
+    annotations = manifest.get("annotations")
+    if not isinstance(annotations, Mapping) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in annotations.items()
+    ):
+        raise ArtifactArchiveError("artifact archive manifest annotations are invalid")
+    return manifest
+
+
+def _descriptor(value: object, label: str) -> OciDescriptor:
+    if not isinstance(value, Mapping):
+        raise ArtifactArchiveError(f"artifact archive {label} descriptor must be an object")
+    media_type = value.get("mediaType")
+    digest = value.get("digest")
+    size = value.get("size")
+    annotations = value.get("annotations", {})
+    if (
+        not isinstance(media_type, str)
+        or not isinstance(digest, str)
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or size < 0
+    ):
+        raise ArtifactArchiveError(f"artifact archive {label} descriptor is invalid")
+    if not isinstance(annotations, Mapping) or not all(
+        isinstance(key, str) and isinstance(item, str) for key, item in annotations.items()
+    ):
+        raise ArtifactArchiveError(f"artifact archive {label} annotations are invalid")
+    return OciDescriptor(
+        media_type=media_type,
+        digest=digest,
+        size=size,
+        annotations=cast(Mapping[str, str], annotations),
+    )
+
+
+def _blob(entries: Mapping[str, bytes], descriptor: OciDescriptor) -> OciBlob:
+    content = entries.get(_blob_path(descriptor.digest))
+    if content is None:
+        raise ArtifactArchiveError(f"artifact archive is missing blob {descriptor.digest}")
+    if (
+        len(content) != descriptor.size
+        or f"sha256:{sha256(content).hexdigest()}" != descriptor.digest
+    ):
+        raise ArtifactArchiveError(
+            f"artifact archive blob {descriptor.digest} does not match its descriptor"
+        )
+    return OciBlob(descriptor=descriptor, content=content)
