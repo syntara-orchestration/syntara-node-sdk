@@ -22,6 +22,7 @@ dev = [
     "pytest-cov>=4.1",
     "ruff>=0.1",
     "mypy>=1.8",
+    "pre-commit>=3.5",
     "types-pyyaml",
     "respx>=0.21",  # HTTP mocking for step unit tests
 ]
