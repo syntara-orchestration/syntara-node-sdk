@@ -335,8 +335,8 @@ Run the same checks locally from the repository root:
 
 ```bash
 uv sync --locked --all-extras
-uv run pytest
-uv run pre-commit run --all-files
+uv run --no-sync pytest
+uv run --no-sync pre-commit run --all-files
 ```
 
 ### Project Structure

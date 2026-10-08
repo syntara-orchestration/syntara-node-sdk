@@ -304,12 +304,12 @@ def create_app(engine) -> FastAPI:
         """
         try:
             step_id = UUID(id_or_name)
-        except ValueError:
+        except ValueError as exc:
             rows = session.exec(
                 select(StepType).where(StepType.name == id_or_name)
             ).all()
             if not rows:
-                raise HTTPException(404, f"step type '{id_or_name}' is not registered")
+                raise HTTPException(404, f"step type '{id_or_name}' is not registered") from exc
             return _latest(list(rows))
         row = session.get(StepType, step_id)
         if row is None:
@@ -320,7 +320,7 @@ def create_app(engine) -> FastAPI:
     async def register_step_type(
         request: Request,
         image_ref: str | None = None,
-        session: Session = Depends(get_session),
+        session: Session = Depends(get_session),  # noqa: B008 - FastAPI dependency injection
     ) -> dict[str, Any]:
         """Validate, compile, and upsert a step manifest into the registry.
 
@@ -336,7 +336,7 @@ def create_app(engine) -> FastAPI:
         try:
             manifest = yaml.safe_load(raw)
         except yaml.YAMLError as exc:
-            raise HTTPException(400, f"manifest is not valid YAML/JSON: {exc}")
+            raise HTTPException(400, f"manifest is not valid YAML/JSON: {exc}") from exc
         if not isinstance(manifest, dict):
             raise HTTPException(400, "manifest must be a mapping")
 
@@ -383,7 +383,7 @@ def create_app(engine) -> FastAPI:
             session.commit()
         except IntegrityError as exc:
             session.rollback()
-            raise HTTPException(409, f"registration violates a constraint: {exc.orig}")
+            raise HTTPException(409, f"registration violates a constraint: {exc.orig}") from exc
         session.refresh(row)
         return {"data": _record(row)}
 
@@ -396,7 +396,7 @@ def create_app(engine) -> FastAPI:
         ),
         limit: int = DEFAULT_PAGE_LIMIT,
         offset: int = 0,
-        session: Session = Depends(get_session),
+        session: Session = Depends(get_session),  # noqa: B008 - FastAPI dependency injection
     ) -> dict[str, Any]:
         """List step types with the documented ``{data, meta}`` envelope."""
         stmt = select(StepType)
@@ -404,7 +404,7 @@ def create_app(engine) -> FastAPI:
             if category is not None:
                 stmt = stmt.where(StepType.category == StepCategory(category))
         except ValueError as exc:
-            raise HTTPException(400, f"invalid filter value: {exc}")
+            raise HTTPException(400, f"invalid filter value: {exc}") from exc
         if enabled is not None:
             stmt = stmt.where(StepType.enabled == enabled)
 
@@ -429,7 +429,7 @@ def create_app(engine) -> FastAPI:
     @app.get("/api/v1/step-types/{id_or_name}")
     def get_step_type(
         id_or_name: str,
-        session: Session = Depends(get_session),
+        session: Session = Depends(get_session),  # noqa: B008 - FastAPI dependency injection
     ) -> dict[str, Any]:
         """Fetch a single step type record (id- or name-addressable)."""
         return {"data": _record(_resolve(session, id_or_name))}
@@ -437,7 +437,7 @@ def create_app(engine) -> FastAPI:
     @app.get("/api/v1/step-types/{id_or_name}/descriptor")
     def get_step_descriptor(
         id_or_name: str,
-        session: Session = Depends(get_session),
+        session: Session = Depends(get_session),  # noqa: B008 - FastAPI dependency injection
     ) -> dict[str, Any]:
         """Return the raw compiled descriptor, unwrapped, for the canvas renderer.
 

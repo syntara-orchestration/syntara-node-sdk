@@ -6,7 +6,6 @@ import os
 from abc import ABC, abstractmethod
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -87,7 +86,6 @@ class BaseCredential(ABC):
         Raises:
             ValueError: If the credential cannot be extracted
         """
-        pass
 
     def _read_from_env(self) -> str:
         """Read credential from environment variable.
@@ -119,8 +117,8 @@ class BaseCredential(ABC):
             raise ValueError(f"Credential file not found: {path}")
         try:
             return path.read_text().strip()
-        except Exception as e:
-            raise ValueError(f"Failed to read credential file {path}: {e}")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ValueError(f"Failed to read credential file {path}: {exc}") from exc
 
 
 class ApiKeyCredential(BaseCredential):
@@ -184,8 +182,7 @@ class BearerTokenCredential(BaseCredential):
             )
 
         # Strip 'Bearer ' prefix if present
-        if token.startswith("Bearer "):
-            token = token[7:]
+        token = token.removeprefix("Bearer ")
 
         return token
 
