@@ -18,7 +18,7 @@ sdks/
 
 - `syntara-plugin-contracts` owns versioned JSON Schema/OpenAPI contracts, deterministic contract bundles, the normative generic-container request-hash rule, and the language-neutral `ContainerService` protobuf source.
 - `syntara-plugin-runtime` owns the minimal runtime-facing interfaces and generated bindings for its language. Its generic container runtime dispatches a selected immutable step revision to one action callable inside a plugin image.
-- `syntara-plugin-sdk` owns typed/YAML authoring, deterministic compilation, offline assembly of metadata-only OCI plugin artifacts and catalog indexes, bounded publication of already-built plugin and catalog-index artifacts, and a small offline authoring CLI. Image building, signing, and catalog-index coordination remain later increments.
+- `syntara-plugin-sdk` owns typed/YAML authoring, deterministic compilation, offline assembly of metadata-only OCI plugin artifacts and catalog indexes, bounded publication of already-built plugin and catalog-index artifacts, and a small offline authoring CLI. Image building, signing, and catalog-index coordination remain later increments. [ADR 0006](.sdlc/adrs/0006-deferred-custom-workload-build-ux.md) records the deferred combined custom-workload build experience and its proof gates.
 
 The repository groups implementation by language so future SDKs can live beside Python under `sdks/typescript/`, `sdks/go/`, and similar directories. Python distributions retain the published `syntara-plugin-*` names, while their clean-break public imports share the `syntara_plugin` namespace: `.sdk`, `.runtime`, and `.contracts`.
 

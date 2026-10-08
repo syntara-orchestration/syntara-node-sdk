@@ -96,3 +96,7 @@ neither operation recompiles source. `publish` requires an explicit registry
 origin, repository, channel (OCI tag), username, and `--password-stdin`; it
 never stores credentials. It can also be invoked from a source checkout with
 `python -m syntara_plugin.sdk.cli`.
+
+The CLI deliberately does not yet build or push a custom workload image. The
+accepted deferred design for a settings-backed `build --with-workload` path is
+recorded in [ADR 0006](../../.sdlc/adrs/0006-deferred-custom-workload-build-ux.md).
