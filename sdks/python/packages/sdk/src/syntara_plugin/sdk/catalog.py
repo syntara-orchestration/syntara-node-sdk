@@ -30,6 +30,13 @@ class CatalogIndexUpdateError(ValueError):
 
 
 @dataclass(frozen=True)
+class _CatalogMergeState:
+    entries: list[dict[str, Any]]
+    generation: int
+    previous_digest: str | None
+
+
+@dataclass(frozen=True)
 class CatalogIndexArtifact:
     """Offline OCI catalog-index artifact ready for a later signing or registry adapter."""
 
@@ -153,56 +160,97 @@ def merge_catalog_entry(
     candidate = dict(entry)
     identity = _entry_identity(candidate)
     if current is None:
-        if current_manifest_digest is not None:
-            raise CatalogIndexUpdateError("a missing catalog cannot have a previous manifest digest")
-        entries = [candidate]
-        generation = 1
-        previous_digest: str | None = None
+        state = _new_catalog_state(candidate, current_manifest_digest)
     else:
-        if current_manifest_digest is None:
-            raise CatalogIndexUpdateError("an existing catalog requires its immutable manifest digest")
-        metadata = _mapping(current.get("metadata"), "current metadata")
-        specification = _mapping(current.get("spec"), "current spec")
-        if metadata.get("sourceId") != source_id:
-            raise CatalogIndexUpdateError("existing catalog sourceId does not match the requested source")
-        generation = metadata.get("generation")
-        if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
-            raise CatalogIndexUpdateError("existing catalog generation must be a positive integer")
-        raw_entries = specification.get("entries")
-        if not isinstance(raw_entries, list):
-            raise CatalogIndexUpdateError("existing catalog entries must be an array")
-        entries = []
-        for index, existing in enumerate(raw_entries):
-            existing_entry = dict(_mapping(existing, f"current spec.entries[{index}]"))
-            if _entry_identity(existing_entry) == identity:
-                if existing_entry == candidate:
-                    return dict(current), True
-                raise CatalogIndexUpdateError(
-                    "catalog already contains a different artifact for "
-                    f"{identity[0]}/{identity[1]}:{identity[2]}; publish a new plugin version"
-                )
-            entries.append(existing_entry)
-        entries.append(candidate)
-        generation += 1
-        previous_digest = current_manifest_digest
+        state = _extend_catalog_state(
+            current,
+            current_manifest_digest,
+            candidate,
+            identity,
+            source_id,
+        )
+        if state is None:
+            return dict(current), True
 
     document: dict[str, Any] = {
         "apiVersion": "syntara.io/v1alpha1",
         "kind": "CatalogIndex",
         "metadata": {
             "sourceId": source_id,
-            "generation": generation,
+            "generation": state.generation,
             "issuedAt": _rfc3339(issued_at),
             "expiresAt": _rfc3339(expires_at),
         },
         "spec": {
             "contractVersion": "syntara.io/v1alpha1",
-            "entries": sorted(entries, key=_entry_identity),
+            "entries": sorted(state.entries, key=_entry_identity),
         },
     }
-    if previous_digest is not None:
-        document["metadata"]["previousIndexDigest"] = previous_digest
+    if state.previous_digest is not None:
+        document["metadata"]["previousIndexDigest"] = state.previous_digest
     return document, False
+
+
+def _new_catalog_state(
+    candidate: dict[str, Any], current_manifest_digest: str | None
+) -> _CatalogMergeState:
+    if current_manifest_digest is not None:
+        raise CatalogIndexUpdateError("a missing catalog cannot have a previous manifest digest")
+    return _CatalogMergeState(entries=[candidate], generation=1, previous_digest=None)
+
+
+def _extend_catalog_state(
+    current: Mapping[str, Any],
+    current_manifest_digest: str | None,
+    candidate: dict[str, Any],
+    identity: tuple[str, str, str],
+    source_id: str,
+) -> _CatalogMergeState | None:
+    if current_manifest_digest is None:
+        raise CatalogIndexUpdateError("an existing catalog requires its immutable manifest digest")
+    metadata = _mapping(current.get("metadata"), "current metadata")
+    specification = _mapping(current.get("spec"), "current spec")
+    if metadata.get("sourceId") != source_id:
+        raise CatalogIndexUpdateError(
+            "existing catalog sourceId does not match the requested source"
+        )
+    generation = _catalog_generation(metadata)
+    entries = _entries_with_candidate(specification, candidate, identity)
+    if entries is None:
+        return None
+    return _CatalogMergeState(
+        entries=entries,
+        generation=generation + 1,
+        previous_digest=current_manifest_digest,
+    )
+
+
+def _catalog_generation(metadata: Mapping[str, Any]) -> int:
+    generation = metadata.get("generation")
+    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+        raise CatalogIndexUpdateError("existing catalog generation must be a positive integer")
+    return generation
+
+
+def _entries_with_candidate(
+    specification: Mapping[str, Any], candidate: dict[str, Any], identity: tuple[str, str, str]
+) -> list[dict[str, Any]] | None:
+    raw_entries = specification.get("entries")
+    if not isinstance(raw_entries, list):
+        raise CatalogIndexUpdateError("existing catalog entries must be an array")
+    entries: list[dict[str, Any]] = []
+    for index, existing in enumerate(raw_entries):
+        existing_entry = dict(_mapping(existing, f"current spec.entries[{index}]"))
+        if _entry_identity(existing_entry) == identity:
+            if existing_entry == candidate:
+                return None
+            raise CatalogIndexUpdateError(
+                "catalog already contains a different artifact for "
+                f"{identity[0]}/{identity[1]}:{identity[2]}; publish a new plugin version"
+            )
+        entries.append(existing_entry)
+    entries.append(candidate)
+    return entries
 
 
 def _mapping(value: object, path: str) -> Mapping[str, Any]:

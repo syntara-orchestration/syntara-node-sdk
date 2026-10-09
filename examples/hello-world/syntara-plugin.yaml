@@ -2,5 +2,22 @@ apiVersion: syntara.io/v1alpha1
 kind: PluginBuildSettings
 manifest: plugin.yaml
 
+## Replace these example registry values before publishing. Do not put a
+## registry password, token, or auth-file path in this file.
+registry:
+  origin: https://registry.example.test
+  artifactRepository: example/plugins/hello-world
+  catalogRepository: example/catalog-index
+  username: publisher
+  allowInsecureLoopbackHttp: false
+
 build:
   artifactOutput: dist/hello-world.oci.tar
+
+publish:
+  channel: 0.1.0
+
+catalog:
+  sourceId: example-catalog
+  channel: stable
+  expiresInHours: 168

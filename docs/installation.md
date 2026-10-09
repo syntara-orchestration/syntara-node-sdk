@@ -26,14 +26,29 @@ credentialless plugin.
 
 ## Work from the repository
 
-For an unreleased SDK checkout or a contribution, create the development
-environment from the repository root:
+For an unreleased SDK checkout, clone the repository and install all local
+packages in editable mode. The SDK command depends on the local contract and
+runtime packages, so install the three together:
+
+```sh
+git clone https://github.com/syntara-orchestration/syntara-plugin-sdk.git
+cd syntara-plugin-sdk
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install \
+  --editable ./sdks/python/packages/contracts \
+  --editable ./sdks/python/packages/runtime \
+  --editable ./sdks/python/packages/sdk
+syntara-plugin --help
+```
+
+For SDK contributors, `uv` additionally installs test and lint tooling from
+the workspace root:
 
 ```sh
 uv venv
 source .venv/bin/activate
 uv sync --all-groups --active --inexact
-syntara-plugin --help
 ```
 
 Run the focused test suite before changing SDK behavior:

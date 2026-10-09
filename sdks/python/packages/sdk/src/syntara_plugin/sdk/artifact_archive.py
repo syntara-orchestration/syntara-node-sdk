@@ -21,6 +21,8 @@ from .oci import OCI_IMAGE_MANIFEST_MEDIA_TYPE, OciBlob, OciDescriptor, canonica
 
 OCI_LAYOUT_VERSION = "1.0.0"
 _MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+_OCI_LAYOUT_FILENAME = "oci-layout"
+_OCI_INDEX_FILENAME = "index.json"
 
 
 class ArtifactArchiveError(ValueError):
@@ -49,9 +51,11 @@ def write_plugin_artifact_archive(artifact: PluginArtifact, destination: Path) -
     blobs = (artifact.config, artifact.plugin_manifest, artifact.content_bundle, artifact.manifest)
     with tarfile.open(destination, mode="x", format=tarfile.PAX_FORMAT) as archive:
         _add_bytes(
-            archive, "oci-layout", canonical_json_bytes({"imageLayoutVersion": OCI_LAYOUT_VERSION})
+            archive,
+            _OCI_LAYOUT_FILENAME,
+            canonical_json_bytes({"imageLayoutVersion": OCI_LAYOUT_VERSION}),
         )
-        _add_bytes(archive, "index.json", canonical_json_bytes(index))
+        _add_bytes(archive, _OCI_INDEX_FILENAME, canonical_json_bytes(index))
         for blob in sorted(blobs, key=lambda item: item.descriptor.digest):
             _add_bytes(archive, _blob_path(blob.descriptor.digest), blob.content)
     return destination
@@ -64,15 +68,33 @@ def read_plugin_artifact_archive(source: Path) -> PluginArtifact:
         raise ArtifactArchiveError(f"artifact archive does not exist: {source}")
     if source.stat().st_size > _MAX_ARCHIVE_BYTES:
         raise ArtifactArchiveError("artifact archive exceeds the 64 MiB safety limit")
+    entries = _read_archive_entries(source)
+    config, descriptor, bundle, indexed_manifest = _read_artifact_blobs(entries)
+    expected_paths = {
+        _OCI_LAYOUT_FILENAME,
+        _OCI_INDEX_FILENAME,
+        *(
+            _blob_path(blob.descriptor.digest)
+            for blob in (indexed_manifest, config, descriptor, bundle)
+        ),
+    }
+    if set(entries) != expected_paths:
+        raise ArtifactArchiveError("artifact archive contains unexpected or missing OCI members")
+    # OCI index annotations describe how the archive is presented; they are not
+    # part of the artifact manifest blob itself. Recreate the artifact's own
+    # descriptor so reading and writing is a lossless PluginArtifact round trip.
+    manifest = OciBlob.create(indexed_manifest.content, OCI_IMAGE_MANIFEST_MEDIA_TYPE)
+    return PluginArtifact(
+        config=config, plugin_manifest=descriptor, content_bundle=bundle, manifest=manifest
+    )
+
+
+def _read_archive_entries(source: Path) -> dict[str, bytes]:
+    """Read only regular, relative members from a bounded OCI layout tarball."""
     try:
         with tarfile.open(source, mode="r:") as archive:
             members = archive.getmembers()
-            if any(
-                not member.isfile()
-                or member.name.startswith("/")
-                or ".." in Path(member.name).parts
-                for member in members
-            ):
+            if any(not _safe_member(member) for member in members):
                 raise ArtifactArchiveError("artifact archive contains an unsafe member")
             entries = {member.name: _read_member(archive, member) for member in members}
     except (tarfile.TarError, OSError) as error:
@@ -81,11 +103,23 @@ def read_plugin_artifact_archive(source: Path) -> PluginArtifact:
         ) from error
     if len(entries) != len(members):
         raise ArtifactArchiveError("artifact archive contains duplicate member names")
+    return entries
 
-    layout = _json_mapping(entries.get("oci-layout"), "oci-layout")
+
+def _safe_member(member: tarfile.TarInfo) -> bool:
+    return (
+        member.isfile() and not member.name.startswith("/") and ".." not in Path(member.name).parts
+    )
+
+
+def _read_artifact_blobs(
+    entries: Mapping[str, bytes],
+) -> tuple[OciBlob, OciBlob, OciBlob, OciBlob]:
+    """Verify the fixed OCI artifact structure and return its four blobs."""
+    layout = _json_mapping(entries.get(_OCI_LAYOUT_FILENAME), _OCI_LAYOUT_FILENAME)
     if layout != {"imageLayoutVersion": OCI_LAYOUT_VERSION}:
         raise ArtifactArchiveError("artifact archive has an unsupported OCI layout version")
-    index = _json_mapping(entries.get("index.json"), "index.json")
+    index = _json_mapping(entries.get(_OCI_INDEX_FILENAME), _OCI_INDEX_FILENAME)
     manifests = index.get("manifests")
     if not isinstance(manifests, list) or len(manifests) != 1:
         raise ArtifactArchiveError("artifact archive index must contain exactly one manifest")
@@ -109,24 +143,7 @@ def read_plugin_artifact_archive(source: Path) -> PluginArtifact:
         raise ArtifactArchiveError("artifact archive plugin descriptor has an invalid media type")
     if bundle.descriptor.media_type != OCI_CONTENT_BUNDLE_MEDIA_TYPE:
         raise ArtifactArchiveError("artifact archive content bundle has an invalid media type")
-
-    expected_paths = {
-        "oci-layout",
-        "index.json",
-        *(
-            _blob_path(blob.descriptor.digest)
-            for blob in (indexed_manifest, config, descriptor, bundle)
-        ),
-    }
-    if set(entries) != expected_paths:
-        raise ArtifactArchiveError("artifact archive contains unexpected or missing OCI members")
-    # OCI index annotations describe how the archive is presented; they are not
-    # part of the artifact manifest blob itself. Recreate the artifact's own
-    # descriptor so reading and writing is a lossless PluginArtifact round trip.
-    manifest = OciBlob.create(indexed_manifest.content, OCI_IMAGE_MANIFEST_MEDIA_TYPE)
-    return PluginArtifact(
-        config=config, plugin_manifest=descriptor, content_bundle=bundle, manifest=manifest
-    )
+    return config, descriptor, bundle, indexed_manifest
 
 
 def _add_bytes(archive: tarfile.TarFile, name: str, content: bytes) -> None:

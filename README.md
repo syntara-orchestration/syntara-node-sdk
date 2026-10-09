@@ -8,11 +8,30 @@ The SDK gives plugin authors one public command: `syntara-plugin`.
 
 ## Start here
 
-```sh
-# When the SDK is published:
-python -m pip install syntara-plugin-sdk
+The SDK is currently developed from source. Clone this repository and install
+its three Python packages in editable mode:
 
-# Create, validate, inspect, and package a plugin without contacting a registry.
+```sh
+git clone https://github.com/syntara-orchestration/syntara-plugin-sdk.git
+cd syntara-plugin-sdk
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install \
+  --editable ./sdks/python/packages/contracts \
+  --editable ./sdks/python/packages/runtime \
+  --editable ./sdks/python/packages/sdk
+```
+
+> **Note:** When the SDK is published, install the released package instead:
+>
+> ```sh
+> python -m pip install syntara-plugin-sdk
+> ```
+
+With the environment active, create, validate, inspect, and package a plugin
+without contacting a registry:
+
+```sh
 syntara-plugin init ./my-plugin --namespace acme
 cd ./my-plugin
 syntara-plugin validate --settings syntara-plugin.yaml
@@ -25,6 +44,39 @@ syntara-plugin inspect ./dist/my-plugin.oci.tar
 `syntara-plugin.yaml` settings file. The default build is deterministic and
 offline: it writes a portable OCI metadata archive but does not build an image,
 publish, install, or execute anything.
+
+## Publish a release
+
+After inspecting a successful archive, configure the non-secret `registry`,
+`publish`, and `catalog` values in your plugin's `syntara-plugin.yaml`. The
+[Hello World settings file](examples/hello-world/syntara-plugin.yaml) is a
+complete template; replace its `registry.example.test` and `example/...`
+values for your registry. Do not store a password or token in the file.
+
+Publish the archive you already verified. Pass the registry password only over
+standard input:
+
+```sh
+printf '%s' "$REGISTRY_PASSWORD" | syntara-plugin publish \
+  ./dist/my-plugin.oci.tar \
+  --settings syntara-plugin.yaml \
+  --password-stdin
+```
+
+Then explicitly create or update the shared catalog index:
+
+```sh
+printf '%s' "$REGISTRY_PASSWORD" | syntara-plugin catalog update \
+  ./dist/my-plugin.oci.tar \
+  --settings syntara-plugin.yaml \
+  --password-stdin
+```
+
+`publish` uploads only the immutable plugin artifact. `catalog update` is a
+separate, serialized release operation that makes that artifact discoverable
+to a Syntara catalog source. For an action using an author-owned container,
+use `syntara-plugin build --with-workload --publish` after configuring the
+`build.workload` settings; see the [user guide](docs/user-guide.md).
 
 For a ready-to-read workspace, see [Hello World](examples/hello-world/).
 Run it directly from a source checkout:

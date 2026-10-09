@@ -25,6 +25,7 @@ _HTTP_PATH_INPUT = re.compile(r"\{input\.([A-Za-z][A-Za-z0-9_-]{0,127})\}")
 _JSON_POINTER = re.compile(r"^(?:/(?:[^~/]|~[01])*)+$")
 _MAX_HTTP_PATH_LENGTH = 1024
 _SHA256 = re.compile(r"^sha256:[a-f0-9]{64}$")
+_INVALID_RUNNER_CONTEXT = "http.v1 runtime context does not satisfy the contract"
 
 
 class HttpOperationError(ValueError):
@@ -142,13 +143,13 @@ def load_http_runner_context(
     if not isinstance(context, Mapping) or validate_document(
         selected_bundle, "http_runner_context", context
     ):
-        raise HttpRunnerContextError("http.v1 runtime context does not satisfy the contract")
+        raise HttpRunnerContextError(_INVALID_RUNNER_CONTEXT)
     operation = context.get("operation")
     output_schema_digest = context.get("outputSchemaDigest")
     if not isinstance(operation, Mapping) or not isinstance(output_schema_digest, str):
-        raise HttpRunnerContextError("http.v1 runtime context does not satisfy the contract")
+        raise HttpRunnerContextError(_INVALID_RUNNER_CONTEXT)
     if not _SHA256.fullmatch(output_schema_digest):
-        raise HttpRunnerContextError("http.v1 runtime context does not satisfy the contract")
+        raise HttpRunnerContextError(_INVALID_RUNNER_CONTEXT)
     return HttpRunnerContext(operation=dict(operation), output_schema_digest=output_schema_digest)
 
 

@@ -141,6 +141,15 @@ def test_init_refuses_to_overwrite_an_existing_path(tmp_path: Path, capsys) -> N
     assert "refusing to overwrite" in capsys.readouterr().err
 
 
+def test_init_rejects_directory_traversal(tmp_path: Path, capsys) -> None:
+    """Workspace creation never interprets an author-supplied parent traversal."""
+    workspace = tmp_path / "safe-parent" / ".." / "escaped"
+
+    assert main(["init", str(workspace)]) == 2
+    assert not (tmp_path / "escaped").exists()
+    assert "path traversal" in capsys.readouterr().err
+
+
 def test_validate_reports_compiler_diagnostics_without_a_traceback(tmp_path: Path, capsys) -> None:
     """Invalid source produces the compiler's stable structured diagnostic surface."""
     missing_root = tmp_path / "missing.yaml"

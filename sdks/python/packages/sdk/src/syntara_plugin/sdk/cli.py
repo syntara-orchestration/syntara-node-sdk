@@ -29,7 +29,7 @@ from .catalog import (
     build_catalog_index_artifact,
     merge_catalog_entry,
 )
-from .authoring import BuildRequest, CompilationError, compile_workspace
+from .authoring import BuildRequest, CompilationError, CompilationResult, compile_workspace
 from .registry import (
     CatalogIndexPublicationError,
     CatalogIndexPublicationTarget,
@@ -52,6 +52,7 @@ from .workload import WorkloadBuildError, WorkloadBuildRequest, build_and_push_w
 
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 _VERSION = re.compile(r"^(?:0|[1-9][0-9]*)\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
+_MACHINE_READABLE_OUTPUT_HELP = "Print machine-readable output."
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -120,7 +121,7 @@ def _parser() -> argparse.ArgumentParser:
             help="Immutable custom-workload image binding; repeat for each logical image ID.",
         )
         compile_command.add_argument(
-            "--json", action="store_true", help="Print machine-readable output."
+            "--json", action="store_true", help=_MACHINE_READABLE_OUTPUT_HELP
         )
         if command == "build":
             compile_command.add_argument(
@@ -182,7 +183,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show concise publication phase information.",
     )
-    publish.add_argument("--json", action="store_true", help="Print machine-readable output.")
+    publish.add_argument("--json", action="store_true", help=_MACHINE_READABLE_OUTPUT_HELP)
 
     catalog = commands.add_parser(
         "catalog",
@@ -204,9 +205,7 @@ def _parser() -> argparse.ArgumentParser:
         "--catalog-repository",
         help="Catalog OCI repository path; overrides registry.catalogRepository.",
     )
-    update.add_argument(
-        "--catalog-channel", help="Catalog OCI tag; overrides catalog.channel."
-    )
+    update.add_argument("--catalog-channel", help="Catalog OCI tag; overrides catalog.channel.")
     update.add_argument(
         "--expires-in-hours",
         type=int,
@@ -216,7 +215,9 @@ def _parser() -> argparse.ArgumentParser:
         "--expected-index-digest",
         help="Optional current stable manifest digest to reject a stale release coordinator.",
     )
-    update.add_argument("--registry-origin", help="Registry origin, including scheme; overrides registry.origin.")
+    update.add_argument(
+        "--registry-origin", help="Registry origin, including scheme; overrides registry.origin."
+    )
     update.add_argument("--username", help="Registry username; overrides registry.username.")
     update.add_argument(
         "--password-stdin",
@@ -230,7 +231,7 @@ def _parser() -> argparse.ArgumentParser:
         help="Allow HTTP only for localhost or 127.0.0.1 developer registries; overrides registry.allowInsecureLoopbackHttp.",
     )
     update.add_argument("--verbose", action="store_true", help="Show concise catalog phases.")
-    update.add_argument("--json", action="store_true", help="Print machine-readable output.")
+    update.add_argument("--json", action="store_true", help=_MACHINE_READABLE_OUTPUT_HELP)
     return parser
 
 
@@ -238,15 +239,14 @@ def _add_settings_argument(command: argparse.ArgumentParser) -> None:
     command.add_argument(
         "--settings",
         type=Path,
-        help=(
-            "Versioned non-secret settings file; otherwise discover "
-            f"{SETTINGS_FILENAME}."
-        ),
+        help=(f"Versioned non-secret settings file; otherwise discover {SETTINGS_FILENAME}."),
     )
 
 
 def _add_publication_arguments(command: argparse.ArgumentParser) -> None:
-    command.add_argument("--registry-origin", help="Registry origin, including scheme; overrides registry.origin.")
+    command.add_argument(
+        "--registry-origin", help="Registry origin, including scheme; overrides registry.origin."
+    )
     command.add_argument(
         "--repository",
         help="Metadata OCI repository path; overrides registry.artifactRepository.",
@@ -270,51 +270,16 @@ def _resolve_arguments(arguments: argparse.Namespace, settings: PluginBuildSetti
     """Apply the documented command-line-over-settings precedence once."""
 
     if arguments.command in {"validate", "inspect", "build"}:
-        arguments.manifest = _required_path(
-            arguments.manifest or settings.manifest,
-            "plugin manifest",
-        )
-        explicit_bindings = _parse_image_bindings(arguments.image_binding or ())
-        arguments.image_bindings = {**settings.build.image_bindings, **explicit_bindings}
+        _resolve_compile_arguments(arguments, settings)
     if arguments.command == "publish":
         arguments.artifact = _required_path(
             arguments.artifact or settings.publish.artifact, "artifact"
         )
 
     if arguments.command in {"build", "publish"}:
-        publish = settings.publish
-        registry = settings.registry
-        arguments.registry_origin = arguments.registry_origin or registry.origin
-        arguments.artifact_repository = registry.artifact_repository
-        arguments.repository = arguments.repository or registry.artifact_repository
-        arguments.channel = arguments.channel or publish.channel
-        arguments.username = arguments.username or registry.username
-        arguments.allow_insecure_loopback_http = _boolean_option(
-            arguments.allow_insecure_loopback_http,
-            registry.allow_insecure_loopback_http,
-            default=False,
-        )
+        _resolve_publication_arguments(arguments, settings)
     if arguments.command == "catalog" and arguments.catalog_command == "update":
-        catalog = settings.catalog
-        registry = settings.registry
-        arguments.artifact = _required_path(
-            arguments.artifact or settings.publish.artifact or settings.build.artifact_output,
-            "published plugin artifact",
-        )
-        arguments.registry_origin = arguments.registry_origin or registry.origin
-        arguments.artifact_repository = registry.artifact_repository
-        arguments.catalog_repository = arguments.catalog_repository or registry.catalog_repository
-        arguments.catalog_channel = arguments.catalog_channel or catalog.channel
-        arguments.catalog_source_id = arguments.catalog_source_id or catalog.source_id
-        arguments.expires_in_hours = arguments.expires_in_hours or catalog.expires_in_hours
-        arguments.username = arguments.username or registry.username
-        arguments.allow_insecure_loopback_http = _boolean_option(
-            arguments.allow_insecure_loopback_http,
-            registry.allow_insecure_loopback_http,
-            default=False,
-        )
-        if arguments.expires_in_hours is not None and arguments.expires_in_hours <= 0:
-            raise SettingsError("--expires-in-hours must be a positive integer")
+        _resolve_catalog_arguments(arguments, settings)
     if arguments.command == "build":
         arguments.output = _required_path(
             arguments.output or settings.build.artifact_output,
@@ -325,6 +290,59 @@ def _resolve_arguments(arguments: argparse.Namespace, settings: PluginBuildSetti
             settings.build,
             registry=settings.registry,
         )
+
+
+def _resolve_compile_arguments(
+    arguments: argparse.Namespace, settings: PluginBuildSettings
+) -> None:
+    arguments.manifest = _required_path(
+        arguments.manifest or settings.manifest,
+        "plugin manifest",
+    )
+    explicit_bindings = _parse_image_bindings(arguments.image_binding or ())
+    arguments.image_bindings = {**settings.build.image_bindings, **explicit_bindings}
+
+
+def _resolve_publication_arguments(
+    arguments: argparse.Namespace, settings: PluginBuildSettings
+) -> None:
+    publish = settings.publish
+    registry = settings.registry
+    arguments.registry_origin = arguments.registry_origin or registry.origin
+    arguments.artifact_repository = registry.artifact_repository
+    arguments.repository = arguments.repository or registry.artifact_repository
+    arguments.channel = arguments.channel or publish.channel
+    arguments.username = arguments.username or registry.username
+    arguments.allow_insecure_loopback_http = _boolean_option(
+        arguments.allow_insecure_loopback_http,
+        registry.allow_insecure_loopback_http,
+        default=False,
+    )
+
+
+def _resolve_catalog_arguments(
+    arguments: argparse.Namespace, settings: PluginBuildSettings
+) -> None:
+    catalog = settings.catalog
+    registry = settings.registry
+    arguments.artifact = _required_path(
+        arguments.artifact or settings.publish.artifact or settings.build.artifact_output,
+        "published plugin artifact",
+    )
+    arguments.registry_origin = arguments.registry_origin or registry.origin
+    arguments.artifact_repository = registry.artifact_repository
+    arguments.catalog_repository = arguments.catalog_repository or registry.catalog_repository
+    arguments.catalog_channel = arguments.catalog_channel or catalog.channel
+    arguments.catalog_source_id = arguments.catalog_source_id or catalog.source_id
+    arguments.expires_in_hours = arguments.expires_in_hours or catalog.expires_in_hours
+    arguments.username = arguments.username or registry.username
+    arguments.allow_insecure_loopback_http = _boolean_option(
+        arguments.allow_insecure_loopback_http,
+        registry.allow_insecure_loopback_http,
+        default=False,
+    )
+    if arguments.expires_in_hours is not None and arguments.expires_in_hours <= 0:
+        raise SettingsError("--expires-in-hours must be a positive integer")
 
 
 def _resolve_workload_settings(
@@ -401,40 +419,21 @@ def _boolean_option(command_line: bool | None, settings: bool | None, *, default
 
 def _init_workspace(arguments: argparse.Namespace) -> int:
     """Create a contained source-only workspace without overwriting author files."""
-    directory = arguments.directory.expanduser()
+    try:
+        directory = _new_workspace_directory(arguments.directory)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
     name = arguments.name or directory.name
-    for label, value, pattern in (
-        ("namespace", arguments.namespace, _IDENTIFIER),
-        ("name", name, _IDENTIFIER),
-        ("action", arguments.action, _IDENTIFIER),
-        ("version", arguments.version, _VERSION),
-    ):
-        if not pattern.fullmatch(value):
-            print(f"error: {label} is not valid: {value!r}", file=sys.stderr)
-            return 2
+    invalid = _invalid_init_argument(arguments, name)
+    if invalid is not None:
+        print(f"error: {invalid}", file=sys.stderr)
+        return 2
     if directory.exists():
         print(f"error: refusing to overwrite existing path: {directory}", file=sys.stderr)
         return 2
-
-    action_path = Path("steps") / arguments.action / "manifest.yaml"
-    input_path = Path("schemas") / f"{arguments.action}.input.yaml"
     try:
-        directory.mkdir(parents=True)
-        (directory / action_path).parent.mkdir(parents=True)
-        (directory / input_path).parent.mkdir(parents=True)
-        (directory / "docs").mkdir()
-        (directory / "plugin.yaml").write_text(
-            _plugin_template(arguments.namespace, name, arguments.version, action_path),
-            encoding="utf-8",
-        )
-        (directory / SETTINGS_FILENAME).write_text(_settings_template(name), encoding="utf-8")
-        (directory / action_path).write_text(
-            _action_template(arguments.action, input_path), encoding="utf-8"
-        )
-        (directory / input_path).write_text(_input_template(), encoding="utf-8")
-        (directory / "docs" / "README.md").write_text(
-            _readme_template(name, arguments.action), encoding="utf-8"
-        )
+        _write_workspace(directory, arguments, name)
     except OSError as error:
         print(f"error: could not create workspace: {error}", file=sys.stderr)
         return 1
@@ -443,6 +442,48 @@ def _init_workspace(arguments: argparse.Namespace) -> int:
     print(f"Created {directory / SETTINGS_FILENAME}")
     print(f"Next: cd {directory} && syntara-plugin validate --settings {SETTINGS_FILENAME}")
     return 0
+
+
+def _new_workspace_directory(requested: Path) -> Path:
+    """Normalize the user-selected new workspace while rejecting traversal syntax."""
+
+    expanded = requested.expanduser()
+    if ".." in expanded.parts:
+        raise ValueError("workspace directory must not contain '..' path traversal")
+    return expanded.resolve(strict=False)
+
+
+def _invalid_init_argument(arguments: argparse.Namespace, name: str) -> str | None:
+    for label, value, pattern in (
+        ("namespace", arguments.namespace, _IDENTIFIER),
+        ("name", name, _IDENTIFIER),
+        ("action", arguments.action, _IDENTIFIER),
+        ("version", arguments.version, _VERSION),
+    ):
+        if not pattern.fullmatch(value):
+            return f"{label} is not valid: {value!r}"
+    return None
+
+
+def _write_workspace(directory: Path, arguments: argparse.Namespace, name: str) -> None:
+    action_path = Path("steps") / arguments.action / "manifest.yaml"
+    input_path = Path("schemas") / f"{arguments.action}.input.yaml"
+    directory.mkdir(parents=True)
+    (directory / action_path).parent.mkdir(parents=True)
+    (directory / input_path).parent.mkdir(parents=True)
+    (directory / "docs").mkdir()
+    (directory / "plugin.yaml").write_text(
+        _plugin_template(arguments.namespace, name, arguments.version, action_path),
+        encoding="utf-8",
+    )
+    (directory / SETTINGS_FILENAME).write_text(_settings_template(name), encoding="utf-8")
+    (directory / action_path).write_text(
+        _action_template(arguments.action, input_path), encoding="utf-8"
+    )
+    (directory / input_path).write_text(_input_template(), encoding="utf-8")
+    (directory / "docs" / "README.md").write_text(
+        _readme_template(name, arguments.action), encoding="utf-8"
+    )
 
 
 def _compile_workspace(arguments: argparse.Namespace) -> int:
@@ -488,25 +529,7 @@ def _compile_workspace(arguments: argparse.Namespace) -> int:
 def _build_artifact(arguments: argparse.Namespace) -> int:
     """Build an archive, optionally bind one Podman workload image, then publish it."""
     try:
-        image_bindings = dict(arguments.image_bindings)
-        workload_image: str | None = None
-        workload_request: WorkloadBuildRequest | None = None
-        if arguments.with_workload:
-            workload_request, image_id = _workload_request(
-                arguments.workload_settings,
-                allow_insecure_loopback_http=arguments.allow_insecure_loopback_http,
-            )
-            _phase(arguments, "Building and pushing the custom workload image")
-            workload_image = build_and_push_workload(workload_request, verbose=arguments.verbose)
-            image_bindings[image_id] = workload_image
-        result = compile_workspace(
-            BuildRequest(
-                arguments.manifest,
-                image_bindings=image_bindings,
-            )
-        )
-        artifact = build_plugin_artifact(result)
-        output = write_plugin_artifact_archive(artifact, arguments.output)
+        result, artifact, output, workload_image, workload_request = _build_archive(arguments)
     except SettingsError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -521,45 +544,103 @@ def _build_artifact(arguments: argparse.Namespace) -> int:
         return 1
 
     payload = {**_artifact_payload(result.digest, artifact), "archive": str(output)}
-    if workload_image is not None:
-        payload["workloadImage"] = workload_image
-        assert workload_request is not None
-        payload["workloadPlatform"] = workload_request.platform
-        payload["workloadRepository"] = workload_request.repository
-    if arguments.publish:
-        try:
-            _phase(arguments, "Publishing the metadata artifact")
-            payload["publication"] = _publish_archive(arguments, output)
-        except SettingsError as error:
-            print(f"error: {error}", file=sys.stderr)
-            return 2
-        except (ArtifactArchiveError, CatalogIndexPublicationError, ValueError) as error:
-            print(f"error: {error}", file=sys.stderr)
-            return 1
-        payload["ok"] = True
+    _add_workload_payload(payload, workload_image, workload_request)
+    publication_status = _publish_built_archive(arguments, output, payload)
+    if publication_status is not None:
+        return publication_status
+    _print_build_result(
+        arguments, result.digest, artifact, output, workload_image, workload_request, payload
+    )
+    return 0
+
+
+def _build_archive(
+    arguments: argparse.Namespace,
+) -> tuple[CompilationResult, PluginArtifact, Path, str | None, WorkloadBuildRequest | None]:
+    image_bindings = dict(arguments.image_bindings)
+    workload_image, workload_request = _build_workload(arguments, image_bindings)
+    result = compile_workspace(BuildRequest(arguments.manifest, image_bindings=image_bindings))
+    artifact = build_plugin_artifact(result)
+    output = write_plugin_artifact_archive(artifact, arguments.output)
+    return result, artifact, output, workload_image, workload_request
+
+
+def _build_workload(
+    arguments: argparse.Namespace, image_bindings: dict[str, str]
+) -> tuple[str | None, WorkloadBuildRequest | None]:
+    if not arguments.with_workload:
+        return None, None
+    request, image_id = _workload_request(
+        arguments.workload_settings,
+        allow_insecure_loopback_http=arguments.allow_insecure_loopback_http,
+    )
+    _phase(arguments, "Building and pushing the custom workload image")
+    image = build_and_push_workload(request, verbose=arguments.verbose)
+    image_bindings[image_id] = image
+    return image, request
+
+
+def _add_workload_payload(
+    payload: dict[str, object],
+    workload_image: str | None,
+    workload_request: WorkloadBuildRequest | None,
+) -> None:
+    if workload_image is None:
+        return
+    assert workload_request is not None
+    payload["workloadImage"] = workload_image
+    payload["workloadPlatform"] = workload_request.platform
+    payload["workloadRepository"] = workload_request.repository
+
+
+def _publish_built_archive(
+    arguments: argparse.Namespace, output: Path, payload: dict[str, object]
+) -> int | None:
+    if not arguments.publish:
+        return None
+    try:
+        _phase(arguments, "Publishing the metadata artifact")
+        payload["publication"] = _publish_archive(arguments, output)
+    except SettingsError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    except (ArtifactArchiveError, CatalogIndexPublicationError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    payload["ok"] = True
+    return None
+
+
+def _print_build_result(
+    arguments: argparse.Namespace,
+    digest: str,
+    artifact: PluginArtifact,
+    output: Path,
+    workload_image: str | None,
+    workload_request: WorkloadBuildRequest | None,
+    payload: Mapping[str, object],
+) -> None:
     if arguments.json:
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    else:
-        print(f"Built: {arguments.manifest} ({artifact.digest})")
-        print(f"Archive: {output}")
-        for name, blob in (
-            ("config", artifact.config),
-            ("pluginDescriptor", artifact.plugin_manifest),
-            ("contentBundle", artifact.content_bundle),
-        ):
-            descriptor = blob.descriptor
-            print(
-                f"  {name}: {descriptor.digest} ({descriptor.media_type}, {descriptor.size} bytes)"
-            )
-        if workload_image is not None:
-            print(f"Workload image: {workload_image}")
-            print(f"Workload platform: {workload_request.platform}")
-        if arguments.publish:
-            publication = payload["publication"]
-            assert isinstance(publication, dict)
-            print(f"Published: {publication['immutableReference']}")
-            print(f"Channel: {publication['repository']}:{publication['channel']}")
-    return 0
+        return
+    print(f"Built: {arguments.manifest} ({digest})")
+    print(f"Archive: {output}")
+    for name, blob in (
+        ("config", artifact.config),
+        ("pluginDescriptor", artifact.plugin_manifest),
+        ("contentBundle", artifact.content_bundle),
+    ):
+        descriptor = blob.descriptor
+        print(f"  {name}: {descriptor.digest} ({descriptor.media_type}, {descriptor.size} bytes)")
+    if workload_image is not None:
+        assert workload_request is not None
+        print(f"Workload image: {workload_image}")
+        print(f"Workload platform: {workload_request.platform}")
+    if arguments.publish:
+        publication = payload["publication"]
+        assert isinstance(publication, Mapping)
+        print(f"Published: {publication['immutableReference']}")
+        print(f"Channel: {publication['repository']}:{publication['channel']}")
 
 
 def _publish_artifact(arguments: argparse.Namespace) -> int:
@@ -595,79 +676,7 @@ def _update_catalog(arguments: argparse.Namespace) -> int:
     """
 
     try:
-        password = _publication_password(arguments, operation="catalog update")
-        missing = [
-            label
-            for label, value in (
-                ("registry origin", arguments.registry_origin),
-                ("catalog repository", arguments.catalog_repository),
-                ("catalog channel", arguments.catalog_channel),
-                ("catalog source ID", arguments.catalog_source_id),
-                ("catalog expiry", arguments.expires_in_hours),
-                ("username", arguments.username),
-            )
-            if value is None or value == ""
-        ]
-        if missing:
-            raise SettingsError("catalog update requires: " + ", ".join(missing))
-        artifact = read_plugin_artifact_archive(arguments.artifact)
-        entry = _catalog_entry(artifact, _required_catalog_artifact_repository(arguments))
-        publisher = CatalogIndexPublisher(
-            CatalogIndexPublicationTarget(
-                registry_origin=arguments.registry_origin,
-                repository=arguments.catalog_repository,
-                channel=arguments.catalog_channel,
-                allow_insecure_loopback_http=arguments.allow_insecure_loopback_http,
-            ),
-            credentials=RegistryCredentials(arguments.username, password),
-        )
-        _phase(arguments, "Reading the current catalog index")
-        current = publisher.read_current()
-        if arguments.expected_index_digest is not None:
-            actual_digest = current.manifest_digest if current is not None else None
-            if actual_digest != arguments.expected_index_digest:
-                raise SettingsError(
-                    "current catalog digest does not match --expected-index-digest"
-                )
-        now = datetime.now(UTC)
-        document, idempotent = merge_catalog_entry(
-            current=current.document if current is not None else None,
-            current_manifest_digest=current.manifest_digest if current is not None else None,
-            entry=entry,
-            source_id=arguments.catalog_source_id,
-            issued_at=now,
-            expires_at=now + timedelta(hours=arguments.expires_in_hours),
-        )
-        metadata = _mapping(document["metadata"], "catalog metadata")
-        if idempotent:
-            assert current is not None
-            payload = {
-                "catalogIndexDigest": current.manifest_digest,
-                "channel": arguments.catalog_channel,
-                "entry": entry,
-                "generation": metadata["generation"],
-                "idempotent": True,
-                "immutableReference": f"{arguments.catalog_repository}@{current.manifest_digest}",
-                "ok": True,
-                "repository": arguments.catalog_repository,
-            }
-        else:
-            index_artifact = build_catalog_index_artifact(document)
-            _phase(arguments, "Publishing the catalog index")
-            publication = publisher.publish(index_artifact)
-            payload = {
-                "catalogIndexDigest": publication.manifest_digest,
-                "channel": publication.channel,
-                "entry": entry,
-                "generation": metadata["generation"],
-                "idempotent": False,
-                "immutableReference": publication.immutable_reference,
-                "ok": True,
-                "previousIndexDigest": (
-                    current.manifest_digest if current is not None else None
-                ),
-                "repository": publication.repository,
-            }
+        payload = _run_catalog_update(arguments)
     except SettingsError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -687,10 +696,116 @@ def _update_catalog(arguments: argparse.Namespace) -> int:
         print(f"Catalog index: {payload['immutableReference']}")
         print(f"Channel: {payload['repository']}:{payload['channel']}")
         print(f"Generation: {payload['generation']}")
+        entry = payload["entry"]
+        assert isinstance(entry, Mapping)
         print(f"Entry: {entry['namespace']}/{entry['name']}:{entry['version']}")
         if payload["idempotent"]:
             print("No publication: the exact release is already in the catalog.")
     return 0
+
+
+def _run_catalog_update(arguments: argparse.Namespace) -> dict[str, object]:
+    password = _publication_password(arguments, operation="catalog update")
+    _require_catalog_configuration(arguments)
+    artifact = read_plugin_artifact_archive(arguments.artifact)
+    entry = _catalog_entry(artifact, _required_catalog_artifact_repository(arguments))
+    publisher = _catalog_publisher(arguments, password)
+    _phase(arguments, "Reading the current catalog index")
+    current = publisher.read_current()
+    _verify_expected_catalog_digest(arguments, current)
+    document, idempotent = _next_catalog_document(arguments, current, entry)
+    metadata = _mapping(document["metadata"], "catalog metadata")
+    return _catalog_update_payload(
+        arguments, publisher, current, entry, metadata, document, idempotent
+    )
+
+
+def _require_catalog_configuration(arguments: argparse.Namespace) -> None:
+    missing = [
+        label
+        for label, value in (
+            ("registry origin", arguments.registry_origin),
+            ("catalog repository", arguments.catalog_repository),
+            ("catalog channel", arguments.catalog_channel),
+            ("catalog source ID", arguments.catalog_source_id),
+            ("catalog expiry", arguments.expires_in_hours),
+            ("username", arguments.username),
+        )
+        if value is None or value == ""
+    ]
+    if missing:
+        raise SettingsError("catalog update requires: " + ", ".join(missing))
+
+
+def _catalog_publisher(arguments: argparse.Namespace, password: str) -> CatalogIndexPublisher:
+    return CatalogIndexPublisher(
+        CatalogIndexPublicationTarget(
+            registry_origin=arguments.registry_origin,
+            repository=arguments.catalog_repository,
+            channel=arguments.catalog_channel,
+            allow_insecure_loopback_http=arguments.allow_insecure_loopback_http,
+        ),
+        credentials=RegistryCredentials(arguments.username, password),
+    )
+
+
+def _verify_expected_catalog_digest(arguments: argparse.Namespace, current: object) -> None:
+    if arguments.expected_index_digest is None:
+        return
+    actual_digest = current.manifest_digest if current is not None else None
+    if actual_digest != arguments.expected_index_digest:
+        raise SettingsError("current catalog digest does not match --expected-index-digest")
+
+
+def _next_catalog_document(
+    arguments: argparse.Namespace, current: object, entry: Mapping[str, str]
+) -> tuple[dict[str, Any], bool]:
+    now = datetime.now(UTC)
+    return merge_catalog_entry(
+        current=current.document if current is not None else None,
+        current_manifest_digest=current.manifest_digest if current is not None else None,
+        entry=entry,
+        source_id=arguments.catalog_source_id,
+        issued_at=now,
+        expires_at=now + timedelta(hours=arguments.expires_in_hours),
+    )
+
+
+def _catalog_update_payload(
+    arguments: argparse.Namespace,
+    publisher: CatalogIndexPublisher,
+    current: object,
+    entry: Mapping[str, str],
+    metadata: Mapping[str, Any],
+    document: Mapping[str, Any],
+    idempotent: bool,
+) -> dict[str, object]:
+    if idempotent:
+        assert current is not None
+        return {
+            "catalogIndexDigest": current.manifest_digest,
+            "channel": arguments.catalog_channel,
+            "entry": dict(entry),
+            "generation": metadata["generation"],
+            "idempotent": True,
+            "immutableReference": f"{arguments.catalog_repository}@{current.manifest_digest}",
+            "ok": True,
+            "repository": arguments.catalog_repository,
+        }
+    index_artifact = build_catalog_index_artifact(document)
+    _phase(arguments, "Publishing the catalog index")
+    publication = publisher.publish(index_artifact)
+    return {
+        "catalogIndexDigest": publication.manifest_digest,
+        "channel": publication.channel,
+        "entry": dict(entry),
+        "generation": metadata["generation"],
+        "idempotent": False,
+        "immutableReference": publication.immutable_reference,
+        "ok": True,
+        "previousIndexDigest": current.manifest_digest if current is not None else None,
+        "repository": publication.repository,
+    }
 
 
 def _catalog_entry(artifact: PluginArtifact, artifact_repository: str) -> dict[str, str]:

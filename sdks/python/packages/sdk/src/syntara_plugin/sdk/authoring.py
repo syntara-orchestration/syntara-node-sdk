@@ -22,6 +22,8 @@ from syntara_plugin.contracts import ContractBundle, load_bundle, validate_docum
 
 DEFAULT_CONTAINER_ABI = "syntara.container/v1alpha1"
 DEFAULT_PROVIDER_ABI = "syntara.provider/v1alpha1"
+PLUGIN_MANIFEST_FILENAME = "plugin.yaml"
+_JSON_SUFFIX = ".json"
 _DIGEST_REFERENCE = re.compile(
     r"^(?:[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?/)?"
     r"[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*"
@@ -209,7 +211,7 @@ def _compile(
     diagnostics: list[Diagnostic] = []
     bundle = load_bundle()
     _validate_contract(
-        bundle, "plugin", plugin.document, "plugin.yaml", plugin.locations, diagnostics
+        bundle, "plugin", plugin.document, PLUGIN_MANIFEST_FILENAME, plugin.locations, diagnostics
     )
     declared_targets = _declared_target_paths(plugin.document)
     paths = [target.path for target in targets]
@@ -220,7 +222,7 @@ def _compile(
             _diagnostic(
                 "TARGET_DUPLICATE",
                 "Each target must be declared once.",
-                "plugin.yaml",
+                PLUGIN_MANIFEST_FILENAME,
                 "Remove the duplicate target entry.",
             )
         )
@@ -229,7 +231,7 @@ def _compile(
             _diagnostic(
                 "TARGET_DECLARATION_MISMATCH",
                 "Targets must be compiled in the root manifest's explicit order.",
-                "plugin.yaml",
+                PLUGIN_MANIFEST_FILENAME,
                 "Pass exactly the explicitly declared target manifests.",
             )
         )
@@ -332,103 +334,133 @@ def _normalize_target(
         "metadata": _ordered(document.get("metadata", {})),
         "sourcePath": path,
     }
+    context = _NormalizationContext(
+        path=path,
+        bundle=bundle,
+        root_directory=root_directory,
+        max_bytes=max_bytes,
+        assets=assets,
+        diagnostics=diagnostics,
+    )
     if kind == "Action":
-        runtime = dict(spec.get("runtime", {}))
-        if runtime.get("kind") == "custom-workload":
-            runtime["workload"] = plugin.get("spec", {}).get("workload", {}).get("image")
-            runtime["abi"] = DEFAULT_CONTAINER_ABI
-        elif runtime.get("driver") == "http.v1":
-            operation = runtime.get("operation")
-            if isinstance(operation, Mapping):
-                normalized_operation = dict(operation)
-                for field_name in ("requestMap", "responseMap"):
-                    if field_name in normalized_operation:
-                        normalized_operation[field_name] = _document_source(
-                            normalized_operation[field_name],
-                            path,
-                            f"runtime/operation/{field_name}",
-                            bundle,
-                            root_directory,
-                            max_bytes,
-                            assets,
-                            diagnostics,
-                            document_kind="http_mapping",
-                        )
-                runtime["operation"] = _ordered(normalized_operation)
-        target["runtime"] = _ordered(runtime)
-        target["input"] = _document_source(
-            spec.get("input"), path, "input", bundle, root_directory, max_bytes, assets, diagnostics
-        )
-        target["output"] = _document_source(
-            spec.get("output"),
-            path,
-            "output",
-            bundle,
-            root_directory,
-            max_bytes,
-            assets,
-            diagnostics,
-        )
-        target["error"] = _document_source(
-            spec.get("error"), path, "error", bundle, root_directory, max_bytes, assets, diagnostics
-        )
-        integration_type = spec.get("integrationType")
-        if integration_type is not None:
-            target["integrationType"] = integration_type
+        _normalize_action(target, spec, plugin, context)
     elif kind == "Trigger":
-        target["driver"] = spec.get("driver")
-        target["configuration"] = _document_source(
-            spec.get("configuration"),
-            path,
-            "configuration",
-            bundle,
-            root_directory,
-            max_bytes,
-            assets,
-            diagnostics,
-        )
+        _normalize_trigger(target, spec, context)
     elif kind == "IntegrationType":
-        target["id"] = spec.get("id")
-        target["endpointKinds"] = _ordered(spec.get("endpointKinds"))
-        target["credentialTypes"] = _ordered(spec.get("credentialTypes"))
-        target["configuration"] = _document_source(
-            spec.get("configuration"),
-            path,
-            "configuration",
-            bundle,
-            root_directory,
-            max_bytes,
-            assets,
-            diagnostics,
-        )
+        _normalize_integration_type(target, spec, context)
     else:
-        target["id"] = spec.get("id")
-        target["integrationType"] = spec.get("integrationType")
-        target["credentialSchema"] = _document_source(
-            spec.get("credentialSchema"),
-            path,
-            "credentialSchema",
-            bundle,
-            root_directory,
-            max_bytes,
-            assets,
-            diagnostics,
-        )
-        target["secretFields"] = _ordered(spec.get("secretFields"))
-        target["issuance"] = _ordered(spec.get("issuance"))
-        output = spec.get("output")
-        if output is not None:
-            target["output"] = _document_source(
-                output,
-                path,
-                "output",
-                bundle,
-                root_directory,
-                max_bytes,
-                assets,
-                diagnostics,
-            )
+        _normalize_credential_recipe(target, spec, context)
     return cast(dict[str, Any], _ordered(target))
+
+
+@dataclass
+class _NormalizationContext:
+    path: str
+    bundle: ContractBundle
+    root_directory: Path | None
+    max_bytes: int
+    assets: dict[str, CompiledAsset]
+    diagnostics: list[Diagnostic]
+
+
+def _normalize_action(
+    target: dict[str, Any],
+    spec: Mapping[str, Any],
+    plugin: Mapping[str, Any],
+    context: _NormalizationContext,
+) -> None:
+    runtime = _normalize_action_runtime(spec.get("runtime"), plugin, context)
+    target["runtime"] = _ordered(runtime)
+    for field_name in ("input", "output", "error"):
+        target[field_name] = _target_document_source(spec.get(field_name), field_name, context)
+    integration_type = spec.get("integrationType")
+    if integration_type is not None:
+        target["integrationType"] = integration_type
+
+
+def _normalize_action_runtime(
+    raw_runtime: object, plugin: Mapping[str, Any], context: _NormalizationContext
+) -> dict[str, Any]:
+    runtime = dict(raw_runtime) if isinstance(raw_runtime, Mapping) else {}
+    if runtime.get("kind") == "custom-workload":
+        plugin_spec = plugin.get("spec", {})
+        workload = plugin_spec.get("workload", {}) if isinstance(plugin_spec, Mapping) else {}
+        runtime["workload"] = workload.get("image") if isinstance(workload, Mapping) else None
+        runtime["abi"] = DEFAULT_CONTAINER_ABI
+    elif runtime.get("driver") == "http.v1":
+        _normalize_http_operation(runtime, context)
+    return runtime
+
+
+def _normalize_http_operation(runtime: dict[str, Any], context: _NormalizationContext) -> None:
+    operation = runtime.get("operation")
+    if not isinstance(operation, Mapping):
+        return
+    normalized = dict(operation)
+    for field_name in ("requestMap", "responseMap"):
+        if field_name in normalized:
+            normalized[field_name] = _target_document_source(
+                normalized[field_name],
+                f"runtime/operation/{field_name}",
+                context,
+                document_kind="http_mapping",
+            )
+    runtime["operation"] = _ordered(normalized)
+
+
+def _normalize_trigger(
+    target: dict[str, Any], spec: Mapping[str, Any], context: _NormalizationContext
+) -> None:
+    target["driver"] = spec.get("driver")
+    target["configuration"] = _target_document_source(
+        spec.get("configuration"), "configuration", context
+    )
+
+
+def _normalize_integration_type(
+    target: dict[str, Any], spec: Mapping[str, Any], context: _NormalizationContext
+) -> None:
+    target["id"] = spec.get("id")
+    target["endpointKinds"] = _ordered(spec.get("endpointKinds"))
+    target["credentialTypes"] = _ordered(spec.get("credentialTypes"))
+    target["configuration"] = _target_document_source(
+        spec.get("configuration"), "configuration", context
+    )
+
+
+def _normalize_credential_recipe(
+    target: dict[str, Any], spec: Mapping[str, Any], context: _NormalizationContext
+) -> None:
+    target["id"] = spec.get("id")
+    target["integrationType"] = spec.get("integrationType")
+    target["credentialSchema"] = _target_document_source(
+        spec.get("credentialSchema"), "credentialSchema", context
+    )
+    target["secretFields"] = _ordered(spec.get("secretFields"))
+    target["issuance"] = _ordered(spec.get("issuance"))
+    output = spec.get("output")
+    if output is not None:
+        target["output"] = _target_document_source(output, "output", context)
+
+
+def _target_document_source(
+    source: object,
+    field_name: str,
+    context: _NormalizationContext,
+    *,
+    document_kind: Literal["schema", "http_mapping"] = "schema",
+) -> object:
+    return _document_source(
+        source,
+        context.path,
+        field_name,
+        context.bundle,
+        context.root_directory,
+        context.max_bytes,
+        context.assets,
+        context.diagnostics,
+        document_kind=document_kind,
+    )
 
 
 def _document_source(
@@ -562,7 +594,7 @@ def _documentation_source(
             _diagnostic(
                 "DOCUMENTATION_PATH_INVALID",
                 str(error),
-                "plugin.yaml",
+                PLUGIN_MANIFEST_FILENAME,
                 "Use a normalized relative .md file inside the plugin workspace.",
             )
         )
@@ -572,14 +604,17 @@ def _documentation_source(
             _diagnostic(
                 "DOCUMENTATION_UNAVAILABLE",
                 f"Typed input cannot resolve documentation {asset_path!r} without a workspace.",
-                "plugin.yaml",
+                PLUGIN_MANIFEST_FILENAME,
                 "Compile a workspace when the root manifest declares documentation.",
             )
         )
         return None
     try:
         resolved = _resolve_path(
-            root_directory, asset_path, SourceLocation("plugin.yaml"), "DOCUMENTATION_PATH_INVALID"
+            root_directory,
+            asset_path,
+            SourceLocation(PLUGIN_MANIFEST_FILENAME),
+            "DOCUMENTATION_PATH_INVALID",
         )
         raw = _read_regular_file(resolved, max_bytes, root=root_directory)
         _validate_markdown(raw)
@@ -591,7 +626,7 @@ def _documentation_source(
             _diagnostic(
                 "DOCUMENTATION_INVALID",
                 f"Cannot load documentation {asset_path!r}: {error}",
-                "plugin.yaml",
+                PLUGIN_MANIFEST_FILENAME,
                 "Use a bounded UTF-8 Markdown file inside the plugin workspace.",
             )
         )
@@ -610,7 +645,7 @@ def _documentation_source(
             _diagnostic(
                 "DOCUMENTATION_ASSET_CONFLICT",
                 f"Documentation path {asset_path!r} is already used by another asset.",
-                "plugin.yaml",
+                PLUGIN_MANIFEST_FILENAME,
                 "Use a unique Markdown path for documentation.",
             )
         )
@@ -656,7 +691,7 @@ def _validate_bindings(
                 _diagnostic(
                     "WORKLOAD_MISSING",
                     "A custom-workload action requires one root workload binding.",
-                    "plugin.yaml",
+                    PLUGIN_MANIFEST_FILENAME,
                     "Add spec.workload.image to the root manifest.",
                 )
             )
@@ -672,7 +707,7 @@ def _validate_bindings(
                 _diagnostic(
                     "IMAGE_BINDING_MISSING",
                     f"No explicit immutable binding was supplied for {identifier!r}.",
-                    "plugin.yaml",
+                    PLUGIN_MANIFEST_FILENAME,
                     "Supply an image binding for this logical image ID.",
                 )
             )
@@ -681,7 +716,7 @@ def _validate_bindings(
                 _diagnostic(
                     "IMAGE_REFERENCE_MUTABLE",
                     f"Image binding for {identifier!r} must be repository@sha256:digest.",
-                    "plugin.yaml",
+                    PLUGIN_MANIFEST_FILENAME,
                     "Resolve the image to an immutable sha256 digest before compilation.",
                 )
             )
@@ -697,7 +732,7 @@ def _validate_connection_contracts(
     for target in targets:
         kind = target.get("kind")
         target_id = target.get("id")
-        source_path = str(target.get("sourcePath", "plugin.yaml"))
+        source_path = str(target.get("sourcePath", PLUGIN_MANIFEST_FILENAME))
         if kind == "IntegrationType" and isinstance(target_id, str):
             if target_id in integrations:
                 diagnostics.append(
@@ -728,7 +763,7 @@ def _validate_connection_contracts(
                 _diagnostic(
                     "CREDENTIAL_INTEGRATION_UNDECLARED",
                     f"Credential type {credential_id!r} references undeclared integration {integration_id!r}.",
-                    str(credential.get("sourcePath", "plugin.yaml")),
+                    str(credential.get("sourcePath", PLUGIN_MANIFEST_FILENAME)),
                     "Declare the referenced IntegrationType in this plugin.",
                 )
             )
@@ -749,7 +784,7 @@ def _validate_connection_contracts(
                     _diagnostic(
                         "INTEGRATION_CREDENTIAL_UNDECLARED",
                         f"Integration type {integration_id!r} references undeclared or incompatible credential type {credential_id!r}.",
-                        str(integration.get("sourcePath", "plugin.yaml")),
+                        str(integration.get("sourcePath", PLUGIN_MANIFEST_FILENAME)),
                         "Declare a CredentialRecipe for this integration type in the same plugin.",
                     )
                 )
@@ -763,7 +798,7 @@ def _validate_connection_contracts(
                 _diagnostic(
                     "ACTION_INTEGRATION_UNDECLARED",
                     f"Action references undeclared integration type {integration_id!r}.",
-                    str(target.get("sourcePath", "plugin.yaml")),
+                    str(target.get("sourcePath", PLUGIN_MANIFEST_FILENAME)),
                     "Declare the referenced IntegrationType in this plugin.",
                 )
             )
@@ -966,7 +1001,7 @@ def _read_document(path: Path, root: Path, max_bytes: int) -> _LoadedDocument:
 
 
 def _parse_asset(path: Path, raw: bytes) -> object:
-    if path.suffix == ".json":
+    if path.suffix == _JSON_SUFFIX:
         return json.loads(raw)
     if path.suffix in {".yaml", ".yml"}:
         _reject_yaml_aliases(raw)
@@ -980,8 +1015,10 @@ def _structured_media_type(path: Path, document_kind: Literal["schema", "http_ma
     """Return the source-byte media type for a bounded structured document."""
 
     if document_kind == "schema":
-        return "application/schema+json" if path.suffix == ".json" else "application/schema+yaml"
-    return "application/json" if path.suffix == ".json" else "application/yaml"
+        return (
+            "application/schema+json" if path.suffix == _JSON_SUFFIX else "application/schema+yaml"
+        )
+    return "application/json" if path.suffix == _JSON_SUFFIX else "application/yaml"
 
 
 def _validate_markdown(raw: bytes) -> None:
