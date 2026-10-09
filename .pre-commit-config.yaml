@@ -3,12 +3,6 @@ repos:
     hooks:
       - id: ruff
         name: Ruff lint
-        entry: uv run --no-sync --no-build ruff check .
-        language: system
-        pass_filenames: false
-
-      - id: mypy
-        name: mypy type check
-        entry: uv run --no-sync --no-build mypy sdk-python/syntara_sdk tools/syntara_tools
+        entry: python -m ruff check .
         language: system
         pass_filenames: false

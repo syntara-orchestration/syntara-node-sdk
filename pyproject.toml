@@ -13,6 +13,8 @@ dev = [
   "pytest>=8.0",
   "jsonschema>=4.23",
   "grpcio-tools==1.78.0",
+  "pre-commit>=3.5",
+  "ruff>=0.1",
 ]
 
 [tool.uv]
@@ -29,6 +31,9 @@ addopts = "-ra --strict-markers"
 line-length = 100
 target-version = "py312"
 extend-exclude = ["sdks/python/packages/runtime/src/syntara_plugin/runtime/protocol/*_pb2*.py"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
 "sdks/python/packages/runtime/src/syntara_plugin/runtime/protocol/*_pb2*.py" = ["F401"]
