@@ -9,6 +9,9 @@ import sys
 import tempfile
 
 
+_SHA256_DIGEST_PREFIX = "sha256:"
+
+
 class WorkloadBuildError(RuntimeError):
     """Raised when the selected workload-image build cannot produce a digest."""
 
@@ -121,9 +124,12 @@ def _run(command: list[str], *, verbose: bool) -> None:
 
 def _is_sha256_digest(value: str) -> bool:
     return (
-        len(value) == len("sha256:") + 64
-        and value.startswith("sha256:")
-        and all(character in "0123456789abcdef" for character in value.removeprefix("sha256:"))
+        len(value) == len(_SHA256_DIGEST_PREFIX) + 64
+        and value.startswith(_SHA256_DIGEST_PREFIX)
+        and all(
+            character in "0123456789abcdef"
+            for character in value.removeprefix(_SHA256_DIGEST_PREFIX)
+        )
     )
 
 
