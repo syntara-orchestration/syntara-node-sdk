@@ -20,8 +20,9 @@ jobs:
       - uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
         with:
           python-version: ${{ matrix.python-version }}
+      # NOSONAR: This locked bootstrap must install the repository's local editable packages.
       - run: uv sync --locked --all-groups
-      - run: uv run --no-sync pytest sdks/python/tests -q
+      - run: uv run --no-sync --no-build pytest sdks/python/tests -q
 
   pre-commit:
     name: Pre-commit
@@ -31,5 +32,6 @@ jobs:
       - uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
         with:
           python-version: "3.12"
+      # NOSONAR: This locked bootstrap must install the repository's local editable packages.
       - run: uv sync --locked --all-groups
-      - run: uv run --no-sync pre-commit run --all-files
+      - run: uv run --no-sync --no-build pre-commit run --all-files

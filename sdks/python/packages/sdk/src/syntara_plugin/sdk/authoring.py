@@ -1053,7 +1053,7 @@ def _validate_markdown(raw: bytes) -> None:
     """Reject ambiguous binary/non-text documentation before it enters an artifact."""
     if b"\x00" in raw:
         raise ValueError("documentation contains a NUL byte")
-    raw.decode("utf-8")
+    _ = raw.decode("utf-8")
 
 
 def _normalise_asset_path(raw: str) -> str:
