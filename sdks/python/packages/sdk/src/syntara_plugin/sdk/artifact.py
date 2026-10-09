@@ -30,6 +30,8 @@ _SCHEMA_SOURCE_FIELDS = frozenset({"configuration", "credentialSchema", "error",
 _HTTP_MAPPING_SOURCE_FIELDS = frozenset(
     {"runtime/operation/requestMap", "runtime/operation/responseMap"}
 )
+_OCI_IMAGE_TITLE_ANNOTATION = "org.opencontainers.image.title"
+_DOCUMENTATION_REFERENCE = "plugin.yaml#/spec/documentation"
 
 
 class ArtifactBuildError(ValueError):
@@ -88,12 +90,12 @@ def build_plugin_artifact(compilation: CompilationResult) -> PluginArtifact:
     plugin_manifest = OciBlob.create(
         compilation.canonical_json(),
         OCI_PLUGIN_MANIFEST_MEDIA_TYPE,
-        annotations={"org.opencontainers.image.title": "plugin.manifest.yaml"},
+        annotations={_OCI_IMAGE_TITLE_ANNOTATION: "plugin.manifest.yaml"},
     )
     content_bundle = OciBlob.create(
         _build_content_bundle(compilation.assets),
         OCI_CONTENT_BUNDLE_MEDIA_TYPE,
-        annotations={"org.opencontainers.image.title": "content.tar.gz"},
+        annotations={_OCI_IMAGE_TITLE_ANNOTATION: "content.tar.gz"},
     )
     config = OciBlob.create(
         canonical_json_bytes(
@@ -118,7 +120,7 @@ def build_plugin_artifact(compilation: CompilationResult) -> PluginArtifact:
                     content_bundle.descriptor.as_dict(),
                 ],
                 "annotations": {
-                    "org.opencontainers.image.title": f"{namespace}/{name}",
+                    _OCI_IMAGE_TITLE_ANNOTATION: f"{namespace}/{name}",
                     "org.opencontainers.image.version": version,
                 },
             }
@@ -145,31 +147,58 @@ def _validate_asset(path: str, asset: CompiledAsset) -> None:
         raise ArtifactBuildError(
             f"Asset index key {path!r} does not match asset path {asset.path!r}."
         )
+    _validate_asset_path(path)
+    _validate_asset_content(path, asset)
+    _validate_asset_references(path, asset)
+
+
+def _validate_asset_path(path: str) -> None:
     parts = PurePosixPath(path).parts
-    if (
-        not path
-        or "\\" in path
-        or path.startswith("/")
-        or path != unicodedata.normalize("NFC", path)
-        or len(path) > 1024
-        or any(ord(character) < 32 or ord(character) == 127 for character in path)
-        or any(part in {"", ".", ".."} or part.startswith(".") for part in parts)
-    ):
+    invalid_path = any(
+        (
+            not path,
+            "\\" in path,
+            path.startswith("/"),
+            path != unicodedata.normalize("NFC", path),
+            len(path) > 1024,
+            _has_control_character(path),
+            _has_unsafe_path_part(parts),
+        )
+    )
+    if invalid_path:
         raise ArtifactBuildError(f"Asset path {path!r} is not a normalized relative POSIX path.")
+
+
+def _has_control_character(path: str) -> bool:
+    return any(ord(character) < 32 or ord(character) == 127 for character in path)
+
+
+def _has_unsafe_path_part(parts: tuple[str, ...]) -> bool:
+    return any(part in {"", ".", ".."} or part.startswith(".") for part in parts)
+
+
+def _validate_asset_content(path: str, asset: CompiledAsset) -> None:
     if f"sha256:{sha256(asset.content).hexdigest()}" != asset.source_digest:
         raise ArtifactBuildError(f"Asset {path!r} source digest does not match its content.")
+
+
+def _validate_asset_references(path: str, asset: CompiledAsset) -> None:
     if not asset.references or asset.references != tuple(sorted(set(asset.references))):
         raise ArtifactBuildError(f"Asset {path!r} must have sorted, unique source references.")
     for reference in asset.references:
-        if reference == "plugin.yaml#/spec/documentation":
-            if asset.media_type != "text/markdown" or not path.endswith(".md"):
-                raise ArtifactBuildError(
-                    f"Asset {path!r} has an invalid documentation reference {reference!r}."
-                )
-            continue
-        expected_media_type = _reference_media_type(path, reference)
-        if asset.media_type != expected_media_type:
-            raise ArtifactBuildError(f"Asset {path!r} has an invalid media type for {reference!r}.")
+        _validate_asset_reference(path, asset.media_type, reference)
+
+
+def _validate_asset_reference(path: str, media_type: str, reference: str) -> None:
+    if reference == _DOCUMENTATION_REFERENCE:
+        if media_type != "text/markdown" or not path.endswith(".md"):
+            raise ArtifactBuildError(
+                f"Asset {path!r} has an invalid documentation reference {reference!r}."
+            )
+        return
+    expected_media_type = _reference_media_type(path, reference)
+    if media_type != expected_media_type:
+        raise ArtifactBuildError(f"Asset {path!r} has an invalid media type for {reference!r}.")
 
 
 def _reference_media_type(path: str, reference: str) -> str:

@@ -350,31 +350,44 @@ def _resolve_workload_settings(
 ) -> WorkloadBuildSettings | None:
     configured = build.workload
     if not arguments.with_workload:
-        if any(
-            value is not None
-            for value in (
-                arguments.workload_engine,
-                arguments.workload_context,
-                arguments.workload_containerfile,
-                arguments.workload_repository,
-                arguments.workload_tag,
-                arguments.workload_platform,
-                arguments.workload_image_id,
-            )
-        ):
-            raise SettingsError("--workload-* options require --with-workload")
+        _reject_workload_overrides(arguments)
         return configured
     return WorkloadBuildSettings(
-        engine=arguments.workload_engine or (configured.engine if configured else None),
-        context=arguments.workload_context or (configured.context if configured else None),
-        containerfile=arguments.workload_containerfile
-        or (configured.containerfile if configured else None),
+        engine=_workload_value(arguments.workload_engine, configured, "engine"),
+        context=_workload_value(arguments.workload_context, configured, "context"),
+        containerfile=_workload_value(
+            arguments.workload_containerfile, configured, "containerfile"
+        ),
         repository=arguments.workload_repository
         or _registry_workload_reference(arguments.registry_origin, registry.workload_repository),
-        tag=arguments.workload_tag or (configured.tag if configured else None),
-        platform=arguments.workload_platform or (configured.platform if configured else None),
-        image_id=arguments.workload_image_id or (configured.image_id if configured else None),
+        tag=_workload_value(arguments.workload_tag, configured, "tag"),
+        platform=_workload_value(arguments.workload_platform, configured, "platform"),
+        image_id=_workload_value(arguments.workload_image_id, configured, "image_id"),
     )
+
+
+def _reject_workload_overrides(arguments: argparse.Namespace) -> None:
+    overrides = (
+        arguments.workload_engine,
+        arguments.workload_context,
+        arguments.workload_containerfile,
+        arguments.workload_repository,
+        arguments.workload_tag,
+        arguments.workload_platform,
+        arguments.workload_image_id,
+    )
+    if any(value is not None for value in overrides):
+        raise SettingsError("--workload-* options require --with-workload")
+
+
+def _workload_value(
+    command_line: str | Path | None,
+    configured: WorkloadBuildSettings | None,
+    attribute: str,
+) -> str | Path | None:
+    if command_line is not None:
+        return command_line
+    return getattr(configured, attribute) if configured is not None else None
 
 
 def _registry_workload_reference(origin: str | None, repository: str | None) -> str | None:

@@ -32,6 +32,7 @@ _DIGEST_REFERENCE = re.compile(
 _MAX_DOCUMENT_BYTES = 1024 * 1024
 _MAX_DOCUMENT_DEPTH = 100
 _MAX_DOCUMENT_NODES = 10_000
+_RECURSIVE_ALIAS_REMEDIATION = "Replace the recursive alias with finite data."
 
 
 @dataclass(frozen=True, order=True)
@@ -260,7 +261,7 @@ def _compile(
                     "DOCUMENT_RECURSIVE",
                     "YAML anchors may not create recursive documents.",
                     target.path,
-                    "Replace the recursive alias with finite data.",
+                    _RECURSIVE_ALIAS_REMEDIATION,
                 )
             )
             continue
@@ -727,35 +728,52 @@ def _validate_connection_contracts(
 ) -> None:
     """Validate immutable integration and credential links within one plugin."""
 
+    integrations, credentials = _collect_connection_types(targets, diagnostics)
+    _validate_credential_integration_links(credentials, integrations, diagnostics)
+    _validate_integration_credential_links(integrations, credentials, diagnostics)
+    _validate_action_integration_links(targets, integrations, diagnostics)
+
+
+def _collect_connection_types(
+    targets: Sequence[Mapping[str, Any]], diagnostics: list[Diagnostic]
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
     integrations: dict[str, Mapping[str, Any]] = {}
     credentials: dict[str, Mapping[str, Any]] = {}
     for target in targets:
         kind = target.get("kind")
-        target_id = target.get("id")
-        source_path = str(target.get("sourcePath", PLUGIN_MANIFEST_FILENAME))
-        if kind == "IntegrationType" and isinstance(target_id, str):
-            if target_id in integrations:
-                diagnostics.append(
-                    _diagnostic(
-                        "INTEGRATION_TYPE_DUPLICATE",
-                        f"Integration type {target_id!r} is declared more than once.",
-                        source_path,
-                        "Declare each integration type identity once per plugin.",
-                    )
-                )
-            integrations[target_id] = target
-        elif kind == "CredentialRecipe" and isinstance(target_id, str):
-            if target_id in credentials:
-                diagnostics.append(
-                    _diagnostic(
-                        "CREDENTIAL_TYPE_DUPLICATE",
-                        f"Credential type {target_id!r} is declared more than once.",
-                        source_path,
-                        "Declare each credential type identity once per plugin.",
-                    )
-                )
-            credentials[target_id] = target
+        if kind == "IntegrationType":
+            _record_connection_type("Integration", target, integrations, diagnostics)
+        elif kind == "CredentialRecipe":
+            _record_connection_type("Credential", target, credentials, diagnostics)
+    return integrations, credentials
 
+
+def _record_connection_type(
+    label: str,
+    target: Mapping[str, Any],
+    records: dict[str, Mapping[str, Any]],
+    diagnostics: list[Diagnostic],
+) -> None:
+    target_id = target.get("id")
+    if not isinstance(target_id, str):
+        return
+    if target_id in records:
+        diagnostics.append(
+            _diagnostic(
+                f"{label.upper()}_TYPE_DUPLICATE",
+                f"{label} type {target_id!r} is declared more than once.",
+                str(target.get("sourcePath", PLUGIN_MANIFEST_FILENAME)),
+                f"Declare each {label.lower()} type identity once per plugin.",
+            )
+        )
+    records[target_id] = target
+
+
+def _validate_credential_integration_links(
+    credentials: Mapping[str, Mapping[str, Any]],
+    integrations: Mapping[str, Mapping[str, Any]],
+    diagnostics: list[Diagnostic],
+) -> None:
     for credential_id, credential in credentials.items():
         integration_id = credential.get("integrationType")
         if not isinstance(integration_id, str) or integration_id not in integrations:
@@ -768,6 +786,12 @@ def _validate_connection_contracts(
                 )
             )
 
+
+def _validate_integration_credential_links(
+    integrations: Mapping[str, Mapping[str, Any]],
+    credentials: Mapping[str, Mapping[str, Any]],
+    diagnostics: list[Diagnostic],
+) -> None:
     for integration_id, integration in integrations.items():
         declared_credentials = integration.get("credentialTypes")
         if not isinstance(declared_credentials, list):
@@ -789,6 +813,12 @@ def _validate_connection_contracts(
                     )
                 )
 
+
+def _validate_action_integration_links(
+    targets: Sequence[Mapping[str, Any]],
+    integrations: Mapping[str, Mapping[str, Any]],
+    diagnostics: list[Diagnostic],
+) -> None:
     for target in targets:
         if target.get("kind") != "Action":
             continue
@@ -965,9 +995,7 @@ def _read_document(path: Path, root: Path, max_bytes: int) -> _LoadedDocument:
         recursive = "recursive" in str(error).lower()
         code = "DOCUMENT_RECURSIVE" if recursive else "YAML_INVALID"
         remediation = (
-            "Replace the recursive alias with finite data."
-            if recursive
-            else "Fix the YAML syntax or duplicate key."
+            _RECURSIVE_ALIAS_REMEDIATION if recursive else "Fix the YAML syntax or duplicate key."
         )
         raise CompilationError([_diagnostic(code, str(error), str(path), remediation)]) from error
     if not isinstance(value, Mapping):
@@ -988,7 +1016,7 @@ def _read_document(path: Path, root: Path, max_bytes: int) -> _LoadedDocument:
                     "DOCUMENT_RECURSIVE",
                     "YAML anchors may not create recursive documents.",
                     str(path),
-                    "Replace the recursive alias with finite data.",
+                    _RECURSIVE_ALIAS_REMEDIATION,
                 )
             ]
         )
@@ -1203,29 +1231,36 @@ def _yaml_locations(raw: bytes, file: str) -> Mapping[str, SourceLocation]:
 
     root = yaml.compose(raw)
     locations: dict[str, SourceLocation] = {"$": SourceLocation(file=file)}
-    visited: set[int] = set()
-
-    def visit(node: yaml.Node, pointer: str) -> None:
-        if id(node) in visited:
-            return
-        visited.add(id(node))
-        locations[pointer] = SourceLocation(
-            file=file,
-            path=f"$/{pointer}" if pointer else "$",
-            line=node.start_mark.line + 1,
-            column=node.start_mark.column + 1,
-        )
-        if isinstance(node, yaml.MappingNode):
-            for key, value in node.value:
-                if isinstance(key, yaml.ScalarNode):
-                    visit(value, f"{pointer}/{key.value}".strip("/"))
-        elif isinstance(node, yaml.SequenceNode):
-            for index, value in enumerate(node.value):
-                visit(value, f"{pointer}/{index}".strip("/"))
-
     if root is not None:
-        visit(root, "")
+        _record_yaml_locations(root, file, locations, set(), "")
     return locations
+
+
+def _record_yaml_locations(
+    node: yaml.Node,
+    file: str,
+    locations: dict[str, SourceLocation],
+    visited: set[int],
+    pointer: str,
+) -> None:
+    if id(node) in visited:
+        return
+    visited.add(id(node))
+    locations[pointer] = SourceLocation(
+        file=file,
+        path=f"$/{pointer}" if pointer else "$",
+        line=node.start_mark.line + 1,
+        column=node.start_mark.column + 1,
+    )
+    if isinstance(node, yaml.MappingNode):
+        for key, value in node.value:
+            if isinstance(key, yaml.ScalarNode):
+                _record_yaml_locations(
+                    value, file, locations, visited, f"{pointer}/{key.value}".strip("/")
+                )
+    elif isinstance(node, yaml.SequenceNode):
+        for index, value in enumerate(node.value):
+            _record_yaml_locations(value, file, locations, visited, f"{pointer}/{index}".strip("/"))
 
 
 def _ordered(value: object) -> object:
