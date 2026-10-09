@@ -22,7 +22,11 @@ from syntara_plugin.contracts import ContractBundle, load_bundle, validate_docum
 
 DEFAULT_CONTAINER_ABI = "syntara.container/v1alpha1"
 DEFAULT_PROVIDER_ABI = "syntara.provider/v1alpha1"
-_DIGEST_REFERENCE = re.compile(r"^[a-z0-9][a-z0-9./_-]*@sha256:[a-f0-9]{64}$")
+_DIGEST_REFERENCE = re.compile(
+    r"^(?:[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?/)?"
+    r"[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*"
+    r"@sha256:[a-f0-9]{64}$"
+)
 _MAX_DOCUMENT_BYTES = 1024 * 1024
 _MAX_DOCUMENT_DEPTH = 100
 _MAX_DOCUMENT_NODES = 10_000
@@ -412,16 +416,18 @@ def _normalize_target(
         )
         target["secretFields"] = _ordered(spec.get("secretFields"))
         target["issuance"] = _ordered(spec.get("issuance"))
-        target["output"] = _document_source(
-            spec.get("output"),
-            path,
-            "output",
-            bundle,
-            root_directory,
-            max_bytes,
-            assets,
-            diagnostics,
-        )
+        output = spec.get("output")
+        if output is not None:
+            target["output"] = _document_source(
+                output,
+                path,
+                "output",
+                bundle,
+                root_directory,
+                max_bytes,
+                assets,
+                diagnostics,
+            )
     return cast(dict[str, Any], _ordered(target))
 
 

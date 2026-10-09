@@ -8,6 +8,7 @@ import grpc
 import pytest
 
 from syntara_plugin.runtime import (
+    ANY_STEP_REVISION,
     ActionRegistry,
     ContainerClient,
     ContainerInvocation,
@@ -110,6 +111,31 @@ def test_unsupported_action_is_a_safe_not_found_failure(
     assert raised.value.code is FailureCode.NOT_FOUND
     assert "delete-organization" not in str(raised.value)
     assert calls == {}
+
+
+def test_platform_runner_can_advertise_and_dispatch_a_control_plane_selected_action() -> None:
+    """A generic runner does not need one image build for every installed action."""
+    calls: list[ContainerInvocation] = []
+
+    def runner(invocation: ContainerInvocation) -> ContainerResult:
+        calls.append(invocation)
+        return ContainerResult(OUTPUT_SCHEMA_DIGEST, output={"handled": True})
+
+    server = grpc.server(ThreadPoolExecutor(max_workers=2))
+    add_container_runtime_service(server, ActionRegistry({}, fallback_action=runner))
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    channel = grpc.insecure_channel(f"127.0.0.1:{port}")
+    client = ContainerClient(channel)
+    try:
+        assert client.health() == (ANY_STEP_REVISION,)
+        result = client.execute(_invocation("syntara.github.create-issue:" + "b" * 64))
+    finally:
+        channel.close()
+        server.stop(grace=0).wait()
+
+    assert result.output == {"handled": True}
+    assert calls[0].step_revision_id == "syntara.github.create-issue:" + "b" * 64
 
 
 def test_unhandled_action_exception_never_exposes_its_message(

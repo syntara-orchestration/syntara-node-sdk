@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 import json
 
@@ -12,7 +13,9 @@ from syntara_plugin.sdk import (
     OCI_CATALOG_INDEX_CONTENT_MEDIA_TYPE,
     OCI_IMAGE_MANIFEST_MEDIA_TYPE,
     CatalogIndexArtifactBuildError,
+    CatalogIndexUpdateError,
     build_catalog_index_artifact,
+    merge_catalog_entry,
 )
 
 
@@ -121,3 +124,89 @@ def test_catalog_index_artifact_rejects_invalid_catalogs(mutate, message: str) -
 
     with pytest.raises(CatalogIndexArtifactBuildError, match=message):
         build_catalog_index_artifact(index)
+
+
+def test_merge_catalog_entry_creates_then_extends_an_append_only_index() -> None:
+    now = datetime(2026, 10, 8, 12, 0, tzinfo=UTC)
+    github = {
+        "namespace": "syntara",
+        "name": "github",
+        "version": "0.1.0",
+        "artifactRepository": "syntara/plugins/github",
+        "artifactDigest": "sha256:" + "a" * 64,
+        "documentationDigest": "sha256:" + "b" * 64,
+        "runtimeOwnership": "platform-runner",
+    }
+    initial, idempotent = merge_catalog_entry(
+        current=None,
+        current_manifest_digest=None,
+        entry=github,
+        source_id="local-quay",
+        issued_at=now,
+        expires_at=now + timedelta(days=7),
+    )
+
+    assert idempotent is False
+    assert initial["metadata"] == {
+        "sourceId": "local-quay",
+        "generation": 1,
+        "issuedAt": "2026-10-08T12:00:00Z",
+        "expiresAt": "2026-10-15T12:00:00Z",
+    }
+
+    echo = {**github, "name": "local-echo", "runtimeOwnership": "custom-workload"}
+    extended, idempotent = merge_catalog_entry(
+        current=initial,
+        current_manifest_digest="sha256:" + "c" * 64,
+        entry=echo,
+        source_id="local-quay",
+        issued_at=now + timedelta(hours=1),
+        expires_at=now + timedelta(days=7, hours=1),
+    )
+
+    assert idempotent is False
+    assert extended["metadata"]["generation"] == 2
+    assert extended["metadata"]["previousIndexDigest"] == "sha256:" + "c" * 64
+    assert [entry["name"] for entry in extended["spec"]["entries"]] == ["github", "local-echo"]
+
+
+def test_merge_catalog_entry_is_idempotent_but_rejects_conflicting_release() -> None:
+    now = datetime(2026, 10, 8, 12, 0, tzinfo=UTC)
+    entry = {
+        "namespace": "syntara",
+        "name": "github",
+        "version": "0.1.0",
+        "artifactRepository": "syntara/plugins/github",
+        "artifactDigest": "sha256:" + "a" * 64,
+        "documentationDigest": "sha256:" + "b" * 64,
+        "runtimeOwnership": "platform-runner",
+    }
+    current, _ = merge_catalog_entry(
+        current=None,
+        current_manifest_digest=None,
+        entry=entry,
+        source_id="local-quay",
+        issued_at=now,
+        expires_at=now + timedelta(days=7),
+    )
+
+    unchanged, idempotent = merge_catalog_entry(
+        current=current,
+        current_manifest_digest="sha256:" + "c" * 64,
+        entry=entry,
+        source_id="local-quay",
+        issued_at=now + timedelta(hours=1),
+        expires_at=now + timedelta(days=7, hours=1),
+    )
+    assert idempotent is True
+    assert unchanged == current
+
+    with pytest.raises(CatalogIndexUpdateError, match="publish a new plugin version"):
+        merge_catalog_entry(
+            current=current,
+            current_manifest_digest="sha256:" + "c" * 64,
+            entry={**entry, "artifactDigest": "sha256:" + "d" * 64},
+            source_id="local-quay",
+            issued_at=now + timedelta(hours=1),
+            expires_at=now + timedelta(days=7, hours=1),
+        )

@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/plugin-build-settings.schema.json",
+  "title": "Syntara Plugin Build Settings",
+  "description": "Non-secret, plugin-root build and release settings for the Syntara plugin authoring CLI.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind"],
+  "properties": {
+    "apiVersion": {
+      "const": "syntara.io/v1alpha1",
+      "description": "The versioned Syntara settings API implemented by this document."
+    },
+    "kind": {
+      "const": "PluginBuildSettings",
+      "description": "Identifies this YAML document as plugin build and release settings."
+    },
+    "manifest": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path to the plugin.yaml bundle inventory. Relative paths are resolved from this settings file."
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Shared non-secret OCI registry coordinates for the plugin release.",
+      "properties": {
+        "origin": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Registry origin, including scheme and optional port, such as https://registry.example.test."
+        },
+        "artifactRepository": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repository that stores the published plugin metadata OCI artifact."
+        },
+        "workloadRepository": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repository that stores the custom-workload container image, when the plugin declares one."
+        },
+        "catalogRepository": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repository that stores the catalog-index OCI artifact used for plugin discovery."
+        },
+        "username": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Registry username. Supply its password only through the command's standard-input option."
+        },
+        "allowInsecureLoopbackHttp": {
+          "type": "boolean",
+          "description": "Permits HTTP only for localhost or 127.0.0.1 development registries; all other registries require TLS."
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Settings for deterministic metadata-artifact assembly and an optional custom-workload image build.",
+      "properties": {
+        "artifactOutput": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Output path for the generated plugin metadata OCI archive (.oci.tar). Relative paths are resolved from this settings file."
+        },
+        "imageBindings": {
+          "type": "object",
+          "description": "Existing immutable custom-workload image references indexed by logical image ID.",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "description": "An immutable OCI image reference in repository@sha256:digest form."
+          }
+        },
+        "workload": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "One author-owned custom-workload image build target. It is used only with the explicit --with-workload command option.",
+          "properties": {
+            "engine": {
+              "const": "podman",
+              "description": "Container engine used to build and push the custom-workload image. Podman is the currently supported engine."
+            },
+            "context": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Container build context directory. Relative paths are resolved from this settings file."
+            },
+            "containerfile": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Path to the Containerfile within the selected build context. Relative paths are resolved from this settings file."
+            },
+            "tag": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Mutable build-and-push tag used only to obtain the registry's resulting immutable image digest."
+            },
+            "platform": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Target operating system and architecture, such as linux/arm64."
+            },
+            "imageId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Logical custom-workload image identifier declared by plugin.yaml and bound to the pushed digest."
+            }
+          }
+        }
+      }
+    },
+    "publish": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Destination defaults for publishing the prebuilt plugin metadata artifact.",
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional path to an existing plugin metadata OCI archive to publish or use for a catalog update."
+        },
+        "channel": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OCI tag channel for the published plugin metadata artifact."
+        }
+      }
+    },
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Defaults for explicitly creating or extending the shared plugin catalog index.",
+      "properties": {
+        "sourceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable catalog-source identity that the Syntara control plane is configured to reconcile."
+        },
+        "channel": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OCI tag channel for the catalog-index artifact, commonly stable."
+        },
+        "expiresInHours": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Validity period, in positive hours, assigned to a newly published catalog index."
+        }
+      }
+    }
+  }
+}

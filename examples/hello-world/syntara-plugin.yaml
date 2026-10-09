@@ -1,0 +1,6 @@
+apiVersion: syntara.io/v1alpha1
+kind: PluginBuildSettings
+manifest: plugin.yaml
+
+build:
+  artifactOutput: dist/hello-world.oci.tar

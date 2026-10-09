@@ -1,6 +1,6 @@
 # ADR 0006: Defer combined custom-workload image builds until catalog flow is proven
 
-- Status: Accepted — deferred implementation
+- Status: Accepted — developer-preview implementation; Execution Plane release gate retained
 - Date: 2026-10-07
 
 ## Context
@@ -21,7 +21,7 @@ not exercise an author-owned workload image. The catalog source, browse,
 documentation, installation, and workflow-builder path must be proven before
 the SDK gains a container-build orchestration feature.
 
-## Decision
+## Original decision
 
 Do not implement combined workload-image construction before all of these are
 proven:
@@ -32,8 +32,23 @@ proven:
 - a minimal `custom-workload` plugin can run through the Execution Plane from
   one pinned image, using the shared container ABI.
 
-After those gates, add an opt-in convenience path to the existing CLI. A
-custom-workload author can use one command such as:
+## Implementation amendment
+
+The local catalog browse, documentation, installation, and workflow-authoring
+proof has now been completed. Implement a narrowly scoped **developer preview**
+for SDK packaging before the custom-workload Execution Plane proof is complete.
+The preview is not evidence that a custom workload can execute successfully,
+receive credentials, or meet production networking policy.
+
+The preview adds the settings model and `build --with-workload` orchestration
+below. It may build and push a custom workload image through Podman, capture
+its immutable digest, write the normal metadata archive, and, when explicitly
+requested, publish that archive. It must retain its preview label until the
+end-to-end custom-workload Execution Plane proof is complete.
+
+## Preview command and settings contract
+
+A custom-workload author can use one command such as:
 
 ```bash
 syntara-plugin build plugin.yaml --with-workload --verbose
@@ -54,11 +69,17 @@ The command must visibly perform these separate operations:
 
 The feature must use one versioned, language-neutral settings model. Semantic
 CLI options map one-to-one to that model and override selected settings. The
-settings-file search order is:
+settings document has one top-level `registry` block for the shared origin,
+username, plugin-metadata repository, workload-image repository, catalog-index
+repository, and optional loopback-HTTP development opt-in. The workload,
+metadata, and catalog publication use their distinct repository paths but do
+not repeat registry identity; the SDK derives the workload's full
+`host/repository` reference from that common origin. The settings-file search
+order is:
 
 1. the explicit `--settings` path;
-2. `.syntara-plugin.yaml` in the current working directory;
-3. `.syntara-plugin.yaml` beside the selected plugin manifest; then
+2. `syntara-plugin.yaml` beside the selected plugin manifest;
+3. `syntara-plugin.yaml` in the current working directory; then
 4. safe SDK defaults.
 
 The first matching settings file wins; settings files are not merged. Runtime
@@ -70,9 +91,12 @@ settings value; a laptop's default operating system or architecture is never a
 safe Execution Plane target.
 
 The existing metadata-only `build` command remains offline and unchanged unless
-`--with-workload` is selected. `publish` remains a separate explicit operation
-for the metadata archive. The convenience path does not sign artifacts, create
-or update a catalog index, install a plugin, or execute a workload.
+`--with-workload` is selected. `--publish` is additionally required before the
+convenience path publishes the metadata archive. The convenience path does not
+sign artifacts, create or update a catalog index, install a plugin, or execute
+a workload. A separate `catalog update` release command may create or append
+to a configured catalog only after it has a verified, published plugin archive;
+it is intentionally not coupled to `build --publish`.
 
 ## Consequences
 
@@ -91,12 +115,13 @@ or update a catalog index, install a plugin, or execute a workload.
 
 ## Implementation and cleanup gate
 
-Before enabling the feature, add unit, integration, and manual tests covering
-settings discovery/precedence, schema validation, no-secret enforcement,
-Podman command construction, target-platform validation, image-push digest
-capture, metadata image binding, verbose/redacted output, cancellation, and
-failure cleanup. Prove an end-to-end custom-workload run through the Execution
-Plane and an installed catalog version.
+The preview requires unit tests for settings discovery/precedence, schema
+validation, no-secret enforcement, Podman command construction,
+target-platform validation, image-push digest capture, metadata image binding,
+and verbose/redacted output. Before removing the preview label or representing
+the feature as production-ready, add cancellation and failure-cleanup coverage
+and prove an end-to-end custom-workload run through the Execution Plane and an
+installed catalog version.
 
 When that path is accepted, remove any temporary demo wrapper or duplicate
 manual build/push instruction that it supersedes. Do not remove the explicit

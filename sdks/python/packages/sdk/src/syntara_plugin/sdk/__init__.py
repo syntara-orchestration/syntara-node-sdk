@@ -23,7 +23,9 @@ from .catalog import (
     OCI_CATALOG_INDEX_CONTENT_MEDIA_TYPE,
     CatalogIndexArtifact,
     CatalogIndexArtifactBuildError,
+    CatalogIndexUpdateError,
     build_catalog_index_artifact,
+    merge_catalog_entry,
 )
 from .oci import OCI_IMAGE_MANIFEST_MEDIA_TYPE, OciBlob, OciDescriptor
 from .registry import (
@@ -31,6 +33,7 @@ from .registry import (
     CatalogIndexPublicationError,
     CatalogIndexPublicationTarget,
     CatalogIndexPublisher,
+    CatalogIndexSnapshot,
     OciRegistryResponse,
     OciRegistryTransport,
     PluginArtifactPublication,
@@ -59,10 +62,12 @@ __all__ = [
     "BuildRequest",
     "CatalogIndexArtifact",
     "CatalogIndexArtifactBuildError",
+    "CatalogIndexUpdateError",
     "CatalogIndexPublication",
     "CatalogIndexPublicationError",
     "CatalogIndexPublicationTarget",
     "CatalogIndexPublisher",
+    "CatalogIndexSnapshot",
     "CompiledAsset",
     "CompilationError",
     "CompilationResult",
@@ -93,6 +98,7 @@ __all__ = [
     "UrllibOciRegistryTransport",
     "build_plugin_artifact",
     "build_catalog_index_artifact",
+    "merge_catalog_entry",
     "compile_model",
     "compile_workspace",
     "load_bundle",

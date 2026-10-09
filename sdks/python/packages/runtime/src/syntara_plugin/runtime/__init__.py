@@ -13,6 +13,7 @@ from .abi import (
     validate_runtime,
 )
 from .container import (
+    ANY_STEP_REVISION,
     ActionRegistry,
     ContainerAction,
     ContainerClient,
@@ -38,6 +39,7 @@ from .http import (
 __all__ = [
     "CONTAINER_ABI",
     "PROVIDER_ABI",
+    "ANY_STEP_REVISION",
     "ActionRegistry",
     "ContainerAction",
     "ContractBundle",

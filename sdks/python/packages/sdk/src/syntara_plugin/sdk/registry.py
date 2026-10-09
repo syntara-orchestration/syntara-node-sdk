@@ -12,15 +12,23 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from hashlib import sha256
 import json
 import re
-from typing import Mapping, Protocol
+from typing import Any, Mapping, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .artifact import OCI_ARTIFACT_TYPE, PluginArtifact
-from .catalog import CatalogIndexArtifact
+from .catalog import (
+    OCI_CATALOG_INDEX_ARTIFACT_TYPE,
+    OCI_CATALOG_INDEX_CONFIG_MEDIA_TYPE,
+    OCI_CATALOG_INDEX_CONTENT_MEDIA_TYPE,
+    CatalogIndexArtifact,
+    CatalogIndexArtifactBuildError,
+    build_catalog_index_artifact,
+)
 from .oci import OCI_IMAGE_MANIFEST_MEDIA_TYPE, OciBlob
 
 _REPOSITORY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,254}$")
@@ -28,6 +36,7 @@ _CHANNEL_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 _LOOPBACK_HTTP_HOSTS = frozenset({"localhost", "127.0.0.1"})
 _UPLOAD_SUCCESS = frozenset({201, 202})
 _MAX_AUTH_RESPONSE_BYTES = 16 * 1024
+_MAX_REGISTRY_RESPONSE_BYTES = 16 * 1024 * 1024
 _BEARER_CHALLENGE = re.compile(r"^Bearer\s+(?P<parameters>.+)$", re.IGNORECASE)
 _AUTH_PARAMETER = re.compile(r'\s*(?P<name>[A-Za-z][A-Za-z0-9_-]*)="(?P<value>[^"]*)"\s*(?:,|$)')
 
@@ -111,13 +120,13 @@ class UrllibOciRegistryTransport:
                 return OciRegistryResponse(
                     response.status,
                     dict(response.headers.items()),
-                    response.read(_MAX_AUTH_RESPONSE_BYTES + 1),
+                    response.read(_MAX_REGISTRY_RESPONSE_BYTES + 1),
                 )
         except HTTPError as error:
             return OciRegistryResponse(
                 error.code,
                 dict(error.headers.items()) if error.headers else {},
-                error.read(_MAX_AUTH_RESPONSE_BYTES + 1),
+                error.read(_MAX_REGISTRY_RESPONSE_BYTES + 1),
             )
         except (URLError, TimeoutError, OSError) as error:
             raise CatalogIndexPublicationError("REGISTRY_UNREACHABLE") from error
@@ -204,6 +213,14 @@ class CatalogIndexPublication:
 
 
 @dataclass(frozen=True)
+class CatalogIndexSnapshot:
+    """One verified existing catalog channel state, if the channel exists."""
+
+    manifest_digest: str
+    document: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class PluginArtifactPublication:
     """Immutable coordinates safe to retain after publishing one plugin artifact."""
 
@@ -249,6 +266,47 @@ class CatalogIndexPublisher:
             channel=self._target.channel,
             manifest_digest=artifact.digest,
         )
+
+    def read_current(self) -> CatalogIndexSnapshot | None:
+        """Read and verify the index currently named by this publisher's channel.
+
+        The reader accepts only the Syntara catalog artifact envelope, verifies
+        the registry's manifest digest against its returned bytes, and verifies
+        the content layer before returning a document for a merge operation.
+        A missing channel is a normal first-publication state.
+        """
+
+        manifest_response = self._request(
+            "GET",
+            f"{self._repository_base_url()}/manifests/{quote(self._target.channel, safe='')}",
+        )
+        if manifest_response.status_code == 404:
+            return None
+        if manifest_response.status_code != 200:
+            raise CatalogIndexPublicationError("CATALOG_INDEX_FETCH_FAILED")
+        manifest_digest = manifest_response.header("Docker-Content-Digest")
+        if manifest_digest is None or manifest_digest != _sha256_digest(manifest_response.content):
+            raise CatalogIndexPublicationError("CATALOG_INDEX_MANIFEST_DIGEST_INVALID")
+        manifest = _json_mapping(manifest_response.content, "CATALOG_INDEX_MANIFEST_INVALID")
+        config_digest, layer_digest = _catalog_descriptor_digests(manifest)
+        config_response = self._request("GET", self._blob_url(config_digest))
+        if config_response.status_code != 200:
+            raise CatalogIndexPublicationError("CATALOG_INDEX_CONFIG_FETCH_FAILED")
+        if _sha256_digest(config_response.content) != config_digest:
+            raise CatalogIndexPublicationError("CATALOG_INDEX_CONFIG_DIGEST_INVALID")
+        config = _json_mapping(config_response.content, "CATALOG_INDEX_CONFIG_INVALID")
+        content_response = self._request("GET", self._blob_url(layer_digest))
+        if content_response.status_code != 200:
+            raise CatalogIndexPublicationError("CATALOG_INDEX_CONTENT_FETCH_FAILED")
+        if _sha256_digest(content_response.content) != layer_digest:
+            raise CatalogIndexPublicationError("CATALOG_INDEX_CONTENT_DIGEST_INVALID")
+        document = _json_mapping(content_response.content, "CATALOG_INDEX_CONTENT_INVALID")
+        try:
+            build_catalog_index_artifact(document)
+        except CatalogIndexArtifactBuildError as error:
+            raise CatalogIndexPublicationError("CATALOG_INDEX_CONTENT_INVALID") from error
+        _validate_catalog_config(config, document, layer_digest)
+        return CatalogIndexSnapshot(manifest_digest=manifest_digest, document=document)
 
     def _ensure_blob(self, blob: OciBlob) -> None:
         """Upload exactly one missing blob through one same-origin upload session."""
@@ -454,6 +512,78 @@ def _validate_plugin_artifact(artifact: PluginArtifact) -> None:
         ]
     ):
         raise CatalogIndexPublicationError("ARTIFACT_MANIFEST_INVALID")
+
+
+def _json_mapping(content: bytes, failure_code: str) -> Mapping[str, Any]:
+    """Decode one bounded JSON object without allowing an arbitrary envelope."""
+
+    if len(content) > _MAX_REGISTRY_RESPONSE_BYTES:
+        raise CatalogIndexPublicationError(failure_code)
+    try:
+        value = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CatalogIndexPublicationError(failure_code) from error
+    if not isinstance(value, Mapping):
+        raise CatalogIndexPublicationError(failure_code)
+    return cast(Mapping[str, Any], value)
+
+
+def _catalog_descriptor_digests(manifest: Mapping[str, Any]) -> tuple[str, str]:
+    """Extract config and sole catalog-content layer digests from an OCI manifest."""
+
+    if (
+        manifest.get("schemaVersion") != 2
+        or manifest.get("mediaType") != OCI_IMAGE_MANIFEST_MEDIA_TYPE
+        or manifest.get("artifactType") != OCI_CATALOG_INDEX_ARTIFACT_TYPE
+    ):
+        raise CatalogIndexPublicationError("CATALOG_INDEX_MANIFEST_INVALID")
+    config = manifest.get("config")
+    if not isinstance(config, Mapping):
+        raise CatalogIndexPublicationError("CATALOG_INDEX_MANIFEST_INVALID")
+    config_digest = config.get("digest")
+    if config.get("mediaType") != OCI_CATALOG_INDEX_CONFIG_MEDIA_TYPE or not _is_sha256_digest(
+        config_digest
+    ):
+        raise CatalogIndexPublicationError("CATALOG_INDEX_MANIFEST_INVALID")
+    layers = manifest.get("layers")
+    if not isinstance(layers, list) or len(layers) != 1 or not isinstance(layers[0], Mapping):
+        raise CatalogIndexPublicationError("CATALOG_INDEX_MANIFEST_INVALID")
+    layer = layers[0]
+    digest = layer.get("digest")
+    if layer.get("mediaType") != OCI_CATALOG_INDEX_CONTENT_MEDIA_TYPE or not _is_sha256_digest(digest):
+        raise CatalogIndexPublicationError("CATALOG_INDEX_MANIFEST_INVALID")
+    assert isinstance(config_digest, str)
+    return config_digest, digest
+
+
+def _validate_catalog_config(
+    config: Mapping[str, Any], document: Mapping[str, Any], content_digest: str
+) -> None:
+    """Confirm the envelope config binds the exact downloaded catalog document."""
+
+    metadata = document.get("metadata")
+    entries = document.get("spec")
+    if not isinstance(metadata, Mapping) or not isinstance(entries, Mapping):
+        raise CatalogIndexPublicationError("CATALOG_INDEX_CONFIG_INVALID")
+    catalog_entries = entries.get("entries")
+    if (
+        config.get("apiVersion") != "syntara.catalog-index.config/v1alpha1"
+        or config.get("kind") != "CatalogIndexArtifactConfig"
+        or config.get("catalogIndexDigest") != content_digest
+        or config.get("sourceId") != metadata.get("sourceId")
+        or config.get("generation") != metadata.get("generation")
+        or not isinstance(catalog_entries, list)
+        or config.get("entryCount") != len(catalog_entries)
+    ):
+        raise CatalogIndexPublicationError("CATALOG_INDEX_CONFIG_INVALID")
+
+
+def _sha256_digest(content: bytes) -> str:
+    return f"sha256:{sha256(content).hexdigest()}"
+
+
+def _is_sha256_digest(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
 
 
 def _parse_bearer_challenge(challenge: str | None) -> dict[str, str]:

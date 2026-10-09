@@ -1,6 +1,9 @@
 # Python SDK
 
 This directory contains the Python implementation of the Syntara Plugin SDK.
+For the author-facing installation path, tutorial, plugin-language reference,
+and contributing guide, start at the repository [README](../../README.md) and
+the [documentation index](../../docs/README.md).
 
 - `packages/sdk/` provides Python authoring, compilation, and deterministic offline OCI-artifact assembly APIs.
 - `packages/runtime/` provides Python runtime ABI helpers.
@@ -86,6 +89,12 @@ printf '%s' "$REGISTRY_PASSWORD" | syntara-plugin publish ./dist/my-plugin.oci.t
   --registry-origin https://registry.example.test \
   --repository acme/plugins/my-plugin --channel 0.1.0 \
   --username publisher --password-stdin
+printf '%s' "$REGISTRY_PASSWORD" | syntara-plugin catalog update ./dist/my-plugin.oci.tar \
+  --catalog-source-id production-catalog \
+  --catalog-repository acme/catalog-index --catalog-channel stable \
+  --expires-in-hours 168 \
+  --registry-origin https://registry.example.test \
+  --username publisher --password-stdin
 ```
 
 It is a thin adapter over the public compiler, OCI builder, archive verifier,
@@ -97,6 +106,22 @@ origin, repository, channel (OCI tag), username, and `--password-stdin`; it
 never stores credentials. It can also be invoked from a source checkout with
 `python -m syntara_plugin.sdk.cli`.
 
-The CLI deliberately does not yet build or push a custom workload image. The
-accepted deferred design for a settings-backed `build --with-workload` path is
-recorded in [ADR 0006](../../.sdlc/adrs/0006-deferred-custom-workload-build-ux.md).
+`catalog update` is the explicit follow-on release operation. It reads and
+verifies the configured catalog channel, creates generation 1 when the channel
+does not exist, or appends a new archive-derived plugin entry while retaining
+existing entries and linking `metadata.previousIndexDigest`. Exact retries are
+idempotent; conflicting bytes for an existing plugin version are rejected. It
+does not make ordinary `publish` modify a shared discovery channel. The
+[user guide](../../docs/user-guide.md) documents settings-backed catalog
+configuration and the single-writer CI requirement.
+
+The default build stays offline. The opt-in `build --with-workload` preview
+uses Podman to build and push one configured workload image, reads its
+registry-returned digest, and binds that immutable reference into the normal
+portable metadata archive. Add `--publish --password-stdin` to publish the
+newly written archive in the same invocation. A versioned non-secret
+`syntara-plugin.yaml` supplies stable `manifest`, shared `registry`, `build`,
+workload, publication, and catalog values; explicit CLI values override it. See
+the [build settings reference](../../docs/build-settings.md) and
+[ADR 0006](../../.sdlc/adrs/0006-deferred-custom-workload-build-ux.md) for the
+settings schema, security boundaries, and remaining Execution Plane gate.

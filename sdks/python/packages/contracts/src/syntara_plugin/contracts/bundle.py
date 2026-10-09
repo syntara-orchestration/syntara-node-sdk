@@ -16,6 +16,7 @@ from referencing import Registry, Resource
 
 ContractKind = Literal[
     "plugin",
+    "plugin_build_settings",
     "action",
     "trigger",
     "runtime",
@@ -33,6 +34,7 @@ ContractKind = Literal[
 ]
 _SCHEMA_FILES: dict[ContractKind, str] = {
     "plugin": "plugin.schema.json",
+    "plugin_build_settings": "plugin-build-settings.schema.json",
     "action": "action.schema.json",
     "trigger": "trigger.schema.json",
     "runtime": "runtime.schema.json",

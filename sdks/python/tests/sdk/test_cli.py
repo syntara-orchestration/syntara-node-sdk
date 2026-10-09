@@ -7,6 +7,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from syntara_plugin.sdk.cli import main
+from syntara_plugin.sdk.settings import SETTINGS_FILENAME
+
+
+_WORKLOAD_DIGEST = "sha256:" + "a" * 64
 
 
 def test_init_creates_a_compilable_workspace_and_validate_reports_its_digest(
@@ -18,6 +22,7 @@ def test_init_creates_a_compilable_workspace_and_validate_reports_its_digest(
 
     assert main(["init", str(workspace), "--namespace", "acme"]) == 0
     assert (workspace / "plugin.yaml").is_file()
+    assert (workspace / SETTINGS_FILENAME).is_file()
     assert (workspace / "steps/request/manifest.yaml").is_file()
     assert (workspace / "schemas/request.input.yaml").is_file()
 
@@ -26,6 +31,50 @@ def test_init_creates_a_compilable_workspace_and_validate_reports_its_digest(
     assert payload["ok"] is True
     assert payload["digest"].startswith("sha256:")
     assert payload["assetCount"] == 2
+
+
+def test_manifest_adjacent_settings_win_over_an_unrelated_cwd_settings_file(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """A plugin root, not the caller's directory, owns its selected settings."""
+    workspace = tmp_path / "status-tools"
+    assert main(["init", str(workspace)]) == 0
+    capsys.readouterr()
+    sibling_output = workspace / "dist/from-plugin-root.oci.tar"
+    cwd_output = tmp_path / "dist/from-cwd.oci.tar"
+    (workspace / SETTINGS_FILENAME).write_text(
+        "\n".join(
+            (
+                "apiVersion: syntara.io/v1alpha1",
+                "kind: PluginBuildSettings",
+                "manifest: plugin.yaml",
+                "build:",
+                f"  artifactOutput: {sibling_output}",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / SETTINGS_FILENAME).write_text(
+        "\n".join(
+            (
+                "apiVersion: syntara.io/v1alpha1",
+                "kind: PluginBuildSettings",
+                f"manifest: {workspace / 'plugin.yaml'}",
+                "build:",
+                f"  artifactOutput: {cwd_output}",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["build", str(workspace / "plugin.yaml"), "--json"]) == 0
+
+    assert json.loads(capsys.readouterr().out)["archive"] == str(sibling_output)
+    assert sibling_output.is_file()
+    assert not cwd_output.exists()
 
 
 def test_inspect_prints_the_canonical_descriptor_for_the_generated_workspace(
@@ -227,3 +276,358 @@ def test_publish_reports_immutable_reference(tmp_path: Path, capsys, monkeypatch
     assert payload["ok"] is True
     assert payload["immutableReference"] == f"acme/status-tools@{payload['artifactDigest']}"
     assert published["credentials"].password == "not-printed"
+
+
+def test_build_discovers_cwd_settings_and_command_line_overrides_its_output(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """A present CWD settings file wins, while an explicit option wins over it."""
+    workspace = tmp_path / "status-tools"
+    assert main(["init", str(workspace)]) == 0
+    capsys.readouterr()
+    configured_output = tmp_path / "configured.oci.tar"
+    explicit_output = tmp_path / "explicit.oci.tar"
+    (tmp_path / SETTINGS_FILENAME).write_text(
+        "\n".join(
+            (
+                "apiVersion: syntara.io/v1alpha1",
+                "kind: PluginBuildSettings",
+                f"manifest: {workspace / 'plugin.yaml'}",
+                "build:",
+                f"  artifactOutput: {configured_output}",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["build", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["archive"] == str(configured_output)
+    assert configured_output.is_file()
+
+    assert main(["build", "--output", str(explicit_output), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["archive"] == str(explicit_output)
+    assert explicit_output.is_file()
+
+
+def test_settings_rejects_registry_secrets(tmp_path: Path, capsys) -> None:
+    """Stable settings reduce repetition but cannot become a secret store."""
+    workspace = tmp_path / "status-tools"
+    assert main(["init", str(workspace)]) == 0
+    capsys.readouterr()
+    settings = tmp_path / SETTINGS_FILENAME
+    settings.write_text(
+        "\n".join(
+            (
+                "apiVersion: syntara.io/v1alpha1",
+                "kind: PluginBuildSettings",
+                "publish:",
+                "  password: must-not-be-here",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["build", str(workspace / "plugin.yaml"), "--settings", str(settings)]) == 2
+    assert "must not contain secret value" in capsys.readouterr().err
+
+
+def test_settings_reject_legacy_duplicate_registry_fields(tmp_path: Path, capsys) -> None:
+    """Unreleased settings use one registry block instead of compatibility aliases."""
+    workspace = _custom_workload_workspace(tmp_path)
+    settings = workspace / SETTINGS_FILENAME
+    settings.write_text(
+        "\n".join(
+            (
+                "apiVersion: syntara.io/v1alpha1",
+                "kind: PluginBuildSettings",
+                "manifest: plugin.yaml",
+                "registry:",
+                "  origin: https://registry.example.test",
+                "publish:",
+                "  registryOrigin: https://registry.example.test",
+                "  channel: 0.1.0",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["build", "--settings", str(settings)]) == 2
+    assert "publish contains unsupported setting(s): registryOrigin" in capsys.readouterr().err
+
+
+def test_settings_rejects_legacy_plugin_repository_field(tmp_path: Path, capsys) -> None:
+    """The artifact repository name describes the published OCI object precisely."""
+    workspace = _custom_workload_workspace(tmp_path)
+    settings = workspace / SETTINGS_FILENAME
+    settings.write_text(
+        "\n".join(
+            (
+                "apiVersion: syntara.io/v1alpha1",
+                "kind: PluginBuildSettings",
+                "manifest: plugin.yaml",
+                "registry:",
+                "  origin: https://registry.example.test",
+                "  pluginRepository: acme/plugins/custom",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["build", "--settings", str(settings)]) == 2
+    assert "registry contains unsupported setting(s): pluginRepository" in capsys.readouterr().err
+
+
+def test_settings_rejects_legacy_build_output_field(tmp_path: Path, capsys) -> None:
+    """Unreleased settings use the explicit artifactOutput name without an alias."""
+    workspace = tmp_path / "status-tools"
+    assert main(["init", str(workspace)]) == 0
+    capsys.readouterr()
+    settings = workspace / SETTINGS_FILENAME
+    settings.write_text(
+        "\n".join(
+            (
+                "apiVersion: syntara.io/v1alpha1",
+                "kind: PluginBuildSettings",
+                "manifest: plugin.yaml",
+                "build:",
+                "  output: dist/status-tools.oci.tar",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["build", "--settings", str(settings)]) == 2
+    assert "build contains unsupported setting(s): output" in capsys.readouterr().err
+
+
+def test_build_with_workload_binds_the_pushed_digest_and_publishes_metadata(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """One opt-in command retains both OCI outputs and never stores a password."""
+    workspace = _custom_workload_workspace(tmp_path)
+    settings = workspace / SETTINGS_FILENAME
+    settings.write_text(
+        "\n".join(
+            (
+                "apiVersion: syntara.io/v1alpha1",
+                "kind: PluginBuildSettings",
+                "manifest: plugin.yaml",
+                "registry:",
+                "  origin: https://registry.example.test",
+                "  artifactRepository: acme/plugins/custom",
+                "  workloadRepository: acme/custom-workload",
+                "  username: publisher",
+                "build:",
+                "  artifactOutput: dist/custom.oci.tar",
+                "  workload:",
+                "    engine: podman",
+                "    context: .",
+                "    containerfile: Containerfile",
+                "    tag: 0.1.0",
+                "    platform: linux/amd64",
+                "    imageId: custom-workload",
+                "publish:",
+                "  channel: 0.1.0",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    built: dict[str, object] = {}
+
+    def build_workload(request, *, verbose):
+        built["request"] = request
+        built["verbose"] = verbose
+        return f"registry.example.test/acme/custom-workload@{_WORKLOAD_DIGEST}"
+
+    class Publisher:
+        def __init__(self, target, *, credentials) -> None:
+            built["target"] = target
+            built["credentials"] = credentials
+
+        def publish(self, artifact):
+            built["artifact"] = artifact
+            return SimpleNamespace(
+                channel="0.1.0",
+                immutable_reference=f"acme/plugins/custom@{artifact.digest}",
+                repository="acme/plugins/custom",
+            )
+
+    monkeypatch.setattr("syntara_plugin.sdk.cli.build_and_push_workload", build_workload)
+    monkeypatch.setattr("syntara_plugin.sdk.cli.PluginArtifactPublisher", Publisher)
+    monkeypatch.setattr("sys.stdin.read", lambda: "not-printed\n")
+
+    assert (
+        main(
+            [
+                "build",
+                "--settings",
+                str(settings),
+                "--with-workload",
+                "--publish",
+                "--password-stdin",
+                "--verbose",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert (
+        payload["workloadImage"] == f"registry.example.test/acme/custom-workload@{_WORKLOAD_DIGEST}"
+    )
+    assert payload["workloadPlatform"] == "linux/amd64"
+    assert payload["workloadRepository"] == "registry.example.test/acme/custom-workload"
+    assert payload["publication"]["immutableReference"] == (
+        f"acme/plugins/custom@{payload['artifactDigest']}"
+    )
+    assert payload["archive"] == str(workspace / "dist/custom.oci.tar")
+    assert built["credentials"].password == "not-printed"
+    assert built["request"].platform == "linux/amd64"
+    descriptor = json.loads(built["artifact"].plugin_manifest.content)
+    assert descriptor["spec"]["workloads"]["custom-workload"]["image"] == (
+        f"registry.example.test/acme/custom-workload@{_WORKLOAD_DIGEST}"
+    )
+
+
+def test_catalog_update_derives_and_publishes_a_catalog_entry_from_a_verified_archive(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    workspace = tmp_path / "status-tools"
+    archive = tmp_path / "dist/status-tools.oci.tar"
+    assert main(["init", str(workspace)]) == 0
+    capsys.readouterr()
+    assert main(["build", str(workspace / "plugin.yaml"), "--output", str(archive)]) == 0
+    capsys.readouterr()
+    settings = tmp_path / SETTINGS_FILENAME
+    settings.write_text(
+        f"""apiVersion: syntara.io/v1alpha1
+kind: PluginBuildSettings
+registry:
+  origin: https://registry.example.test
+  artifactRepository: acme/plugins/status-tools
+  catalogRepository: acme/catalog-index
+  username: publisher
+publish:
+  artifact: {archive}
+catalog:
+  sourceId: public-catalog
+  channel: stable
+  expiresInHours: 168
+""",
+        encoding="utf-8",
+    )
+    published: dict[str, object] = {}
+
+    class Publisher:
+        def __init__(self, target, *, credentials) -> None:
+            published["target"] = target
+            published["credentials"] = credentials
+
+        def read_current(self):
+            return None
+
+        def publish(self, artifact):
+            published["artifact"] = artifact
+            return SimpleNamespace(
+                channel="stable",
+                immutable_reference=f"acme/catalog-index@{artifact.digest}",
+                manifest_digest=artifact.digest,
+                repository="acme/catalog-index",
+            )
+
+    monkeypatch.setattr("syntara_plugin.sdk.cli.CatalogIndexPublisher", Publisher)
+    monkeypatch.setattr("sys.stdin.read", lambda: "not-printed\n")
+
+    assert (
+        main(
+            [
+                "catalog",
+                "update",
+                "--settings",
+                str(settings),
+                "--password-stdin",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["idempotent"] is False
+    assert payload["generation"] == 1
+    assert payload["entry"] == {
+        "namespace": "example",
+        "name": "status-tools",
+        "version": "0.1.0",
+        "artifactRepository": "acme/plugins/status-tools",
+        "artifactDigest": payload["entry"]["artifactDigest"],
+        "documentationDigest": payload["entry"]["documentationDigest"],
+        "runtimeOwnership": "platform-runner",
+    }
+    assert payload["entry"]["artifactDigest"].startswith("sha256:")
+    assert payload["entry"]["documentationDigest"].startswith("sha256:")
+    assert json.loads(published["artifact"].catalog_index.content)["spec"]["entries"] == [
+        payload["entry"]
+    ]
+    assert published["target"].repository == "acme/catalog-index"
+    assert published["credentials"].password == "not-printed"
+
+
+def _custom_workload_workspace(tmp_path: Path) -> Path:
+    """Write the smallest source workspace that requires one custom workload image."""
+    workspace = tmp_path / "custom-workload"
+    (workspace / "steps/create/manifest.yaml").parent.mkdir(parents=True)
+    (workspace / "docs").mkdir()
+    (workspace / "Containerfile").write_text("FROM scratch\n", encoding="utf-8")
+    (workspace / "plugin.yaml").write_text(
+        """apiVersion: syntara.io/v1alpha1
+kind: Plugin
+metadata:
+  namespace: acme
+  name: custom-workload
+  version: 0.1.0
+  displayName: Custom workload
+  description: One custom workload action.
+spec:
+  documentation:
+    path: docs/README.md
+  workload:
+    image: custom-workload
+  targets:
+    - steps/create/manifest.yaml
+""",
+        encoding="utf-8",
+    )
+    (workspace / "steps/create/manifest.yaml").write_text(
+        """apiVersion: syntara.io/v1alpha1
+kind: Action
+metadata:
+  name: create
+  displayName: Create
+  description: A custom workload action.
+spec:
+  runtime:
+    kind: custom-workload
+  input:
+    kind: inline
+    value:
+      type: object
+  output:
+    kind: inline
+    value:
+      type: object
+  error:
+    kind: inline
+    value:
+      type: object
+""",
+        encoding="utf-8",
+    )
+    (workspace / "docs/README.md").write_text("# Custom workload\n", encoding="utf-8")
+    return workspace

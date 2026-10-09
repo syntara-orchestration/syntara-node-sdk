@@ -31,6 +31,11 @@ _MAX_JSON_BYTES = 1_048_576
 _MAX_TIMEOUT_SECONDS = 86_400
 _PROGRESS_STATES = frozenset({"started", "heartbeat", "progress"})
 
+# A platform-owned runner can handle any installed action that the control
+# plane has already resolved to that runner. It is a health-advertisement
+# capability only, never a valid ``step_revision_id`` in an Execute request.
+ANY_STEP_REVISION = "*"
+
 
 @dataclass(frozen=True)
 class ContainerInvocation:
@@ -138,33 +143,52 @@ ContainerAction = Callable[[ContainerInvocation], ContainerResult]
 
 
 class ActionRegistry:
-    """Maps immutable step revision identities to action callables in one image."""
+    """Maps immutable step revisions to actions, with an optional generic fallback.
 
-    def __init__(self, actions: Mapping[str, ContainerAction]) -> None:
+    Most publisher workload images register their exact supported revisions.
+    A Syntara-managed runner may instead supply ``fallback_action``: the
+    control plane has already selected the runner image and provides a
+    validated runtime context for the particular installed action.  Health
+    advertises :data:`ANY_STEP_REVISION` in that case so the Execution Plane
+    can distinguish a generic runner from an image that omitted a revision.
+    """
+
+    def __init__(
+        self,
+        actions: Mapping[str, ContainerAction],
+        *,
+        fallback_action: ContainerAction | None = None,
+    ) -> None:
         self._actions = dict(actions)
-        if not self._actions:
-            raise ValueError("at least one step revision must be registered")
+        self._fallback_action = fallback_action
+        if not self._actions and self._fallback_action is None:
+            raise ValueError("at least one step revision or a fallback action must be registered")
         for step_revision_id, action in self._actions.items():
             if not _IDENTITY.fullmatch(step_revision_id):
                 raise ValueError("step revision IDs must be Syntara identities")
             if not callable(action):
                 raise TypeError("registered actions must be callable")
+        if self._fallback_action is not None and not callable(self._fallback_action):
+            raise TypeError("fallback action must be callable")
 
     @property
     def step_revision_ids(self) -> tuple[str, ...]:
-        """Stable action identities supported by this container image."""
+        """Stable exact identities plus generic-runner capability when present."""
 
-        return tuple(sorted(self._actions))
+        identities = tuple(sorted(self._actions))
+        return identities + ((ANY_STEP_REVISION,) if self._fallback_action is not None else ())
 
     def resolve(self, step_revision_id: str) -> ContainerAction:
-        try:
-            return self._actions[step_revision_id]
-        except KeyError as error:
-            raise ContainerInvocationError(
-                FailureCode.NOT_FOUND,
-                "The requested plugin action is not available in this container image.",
-                outcome="not_started",
-            ) from error
+        action = self._actions.get(step_revision_id)
+        if action is not None:
+            return action
+        if self._fallback_action is not None:
+            return self._fallback_action
+        raise ContainerInvocationError(
+            FailureCode.NOT_FOUND,
+            "The requested plugin action is not available in this container image.",
+            outcome="not_started",
+        )
 
 
 class ContainerRuntimeService(container_pb2_grpc.ContainerServiceServicer):

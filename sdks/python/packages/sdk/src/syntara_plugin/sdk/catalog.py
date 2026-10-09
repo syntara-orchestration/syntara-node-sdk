@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Mapping, cast
 
 from syntara_plugin.contracts import (
@@ -23,6 +23,10 @@ OCI_CATALOG_INDEX_CONTENT_MEDIA_TYPE = "application/vnd.syntara.catalog-index.co
 
 class CatalogIndexArtifactBuildError(ValueError):
     """Raised when a catalog index cannot safely form a deterministic OCI artifact."""
+
+
+class CatalogIndexUpdateError(ValueError):
+    """Raised when a new catalog entry cannot safely extend a prior index."""
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,83 @@ def build_catalog_index_artifact(index: Mapping[str, Any]) -> CatalogIndexArtifa
     return CatalogIndexArtifact(config=config, catalog_index=catalog_index, manifest=manifest)
 
 
+def merge_catalog_entry(
+    *,
+    current: Mapping[str, Any] | None,
+    current_manifest_digest: str | None,
+    entry: Mapping[str, Any],
+    source_id: str,
+    issued_at: datetime,
+    expires_at: datetime,
+) -> tuple[dict[str, Any], bool]:
+    """Create the next immutable index document for one new plugin release.
+
+    A catalog version is an append-only release ledger: an entry whose
+    ``namespace``, ``name``, and ``version`` already exists must be identical
+    to be considered an idempotent retry.  A conflicting re-publication is
+    rejected rather than silently redirecting an already released version to
+    different artifact bytes.
+    """
+
+    if issued_at.tzinfo is None or expires_at.tzinfo is None or expires_at <= issued_at:
+        raise CatalogIndexUpdateError("catalog timestamps must be timezone-aware and increasing")
+    if not source_id:
+        raise CatalogIndexUpdateError("catalog source_id must be non-empty")
+    candidate = dict(entry)
+    identity = _entry_identity(candidate)
+    if current is None:
+        if current_manifest_digest is not None:
+            raise CatalogIndexUpdateError("a missing catalog cannot have a previous manifest digest")
+        entries = [candidate]
+        generation = 1
+        previous_digest: str | None = None
+    else:
+        if current_manifest_digest is None:
+            raise CatalogIndexUpdateError("an existing catalog requires its immutable manifest digest")
+        metadata = _mapping(current.get("metadata"), "current metadata")
+        specification = _mapping(current.get("spec"), "current spec")
+        if metadata.get("sourceId") != source_id:
+            raise CatalogIndexUpdateError("existing catalog sourceId does not match the requested source")
+        generation = metadata.get("generation")
+        if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+            raise CatalogIndexUpdateError("existing catalog generation must be a positive integer")
+        raw_entries = specification.get("entries")
+        if not isinstance(raw_entries, list):
+            raise CatalogIndexUpdateError("existing catalog entries must be an array")
+        entries = []
+        for index, existing in enumerate(raw_entries):
+            existing_entry = dict(_mapping(existing, f"current spec.entries[{index}]"))
+            if _entry_identity(existing_entry) == identity:
+                if existing_entry == candidate:
+                    return dict(current), True
+                raise CatalogIndexUpdateError(
+                    "catalog already contains a different artifact for "
+                    f"{identity[0]}/{identity[1]}:{identity[2]}; publish a new plugin version"
+                )
+            entries.append(existing_entry)
+        entries.append(candidate)
+        generation += 1
+        previous_digest = current_manifest_digest
+
+    document: dict[str, Any] = {
+        "apiVersion": "syntara.io/v1alpha1",
+        "kind": "CatalogIndex",
+        "metadata": {
+            "sourceId": source_id,
+            "generation": generation,
+            "issuedAt": _rfc3339(issued_at),
+            "expiresAt": _rfc3339(expires_at),
+        },
+        "spec": {
+            "contractVersion": "syntara.io/v1alpha1",
+            "entries": sorted(entries, key=_entry_identity),
+        },
+    }
+    if previous_digest is not None:
+        document["metadata"]["previousIndexDigest"] = previous_digest
+    return document, False
+
+
 def _mapping(value: object, path: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise CatalogIndexArtifactBuildError(f"{path} must be an object")
@@ -144,3 +225,19 @@ def _parse_issued_at(value: object) -> datetime:
         )
     except ValueError as error:
         raise CatalogIndexArtifactBuildError("metadata/issuedAt must be RFC 3339") from error
+
+
+def _entry_identity(entry: Mapping[str, Any]) -> tuple[str, str, str]:
+    try:
+        namespace = _string(entry["namespace"], "catalog entry namespace")
+        name = _string(entry["name"], "catalog entry name")
+        version = _string(entry["version"], "catalog entry version")
+    except KeyError as error:
+        raise CatalogIndexUpdateError(f"catalog entry is missing {error.args[0]!r}") from error
+    return namespace, name, version
+
+
+def _rfc3339(value: datetime) -> str:
+    """Normalize authoring timestamps to the canonical UTC wire form."""
+
+    return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")

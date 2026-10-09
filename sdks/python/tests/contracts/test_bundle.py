@@ -47,12 +47,42 @@ def test_bundle_has_stable_digest_and_required_contracts() -> None:
         "integration.schema.json",
         "provider.schema.json",
         "plugin.schema.json",
+        "plugin-build-settings.schema.json",
         "runtime.schema.json",
         "trigger-driver.schema.json",
         "trigger-event-mapping.schema.json",
         "trigger.schema.json",
     }
     assert RuntimeContractBundle is SdkContractBundle
+
+
+def test_plugin_build_settings_schema_is_descriptive_and_strict() -> None:
+    bundle = load_bundle()
+    schema = bundle.documents["plugin-build-settings.schema.json"]
+
+    assert schema["properties"]["registry"]["properties"]["artifactRepository"]["description"]
+    assert schema["properties"]["build"]["properties"]["artifactOutput"]["description"]
+    assert schema["properties"]["build"]["properties"]["workload"]["properties"][
+        "context"
+    ]["description"]
+    assert validate_document(
+        bundle,
+        "plugin_build_settings",
+        {
+            "apiVersion": "syntara.io/v1alpha1",
+            "kind": "PluginBuildSettings",
+            "build": {"artifactOutput": "dist/plugin.oci.tar"},
+        },
+    ) == []
+    assert validate_document(
+        bundle,
+        "plugin_build_settings",
+        {
+            "apiVersion": "syntara.io/v1alpha1",
+            "kind": "PluginBuildSettings",
+            "registry": {"pluginRepository": "acme/plugin"},
+        },
+    )
 
 
 def test_valid_plugin_action_and_trigger_documents() -> None:

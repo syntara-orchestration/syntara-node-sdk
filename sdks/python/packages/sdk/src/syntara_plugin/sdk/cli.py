@@ -1,19 +1,21 @@
 """Developer-oriented command-line adapter for the Syntara plugin SDK.
 
-The CLI delegates every source interpretation to ``compile_workspace``. It can
-assemble and explicitly publish metadata OCI artifacts, but it never resolves
-workload-image tags, builds workload images, signs artifacts, discovers
-registries, or stores registry credentials.
+The CLI delegates every source interpretation to ``compile_workspace``. Its
+default build stays offline and deterministic. An explicit custom-workload
+preview may use Podman to build and push one author-owned image before binding
+the registry-returned immutable digest into the normal metadata artifact.
 """
 
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 import re
 import sys
-from typing import Sequence
+from typing import Any, Mapping, Sequence
+from urllib.parse import urlparse
 
 from .artifact import ArtifactBuildError, PluginArtifact, build_plugin_artifact
 from .artifact_archive import (
@@ -21,13 +23,31 @@ from .artifact_archive import (
     read_plugin_artifact_archive,
     write_plugin_artifact_archive,
 )
+from .catalog import (
+    CatalogIndexArtifactBuildError,
+    CatalogIndexUpdateError,
+    build_catalog_index_artifact,
+    merge_catalog_entry,
+)
 from .authoring import BuildRequest, CompilationError, compile_workspace
 from .registry import (
     CatalogIndexPublicationError,
+    CatalogIndexPublicationTarget,
+    CatalogIndexPublisher,
     PluginArtifactPublicationTarget,
     PluginArtifactPublisher,
     RegistryCredentials,
 )
+from .settings import (
+    BuildSettings,
+    PluginBuildSettings,
+    RegistrySettings,
+    SETTINGS_FILENAME,
+    SettingsError,
+    WorkloadBuildSettings,
+    load_settings,
+)
+from .workload import WorkloadBuildError, WorkloadBuildRequest, build_and_push_workload
 
 
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
@@ -40,6 +60,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.command == "init":
         return _init_workspace(arguments)
+    try:
+        settings = load_settings(
+            explicit_path=getattr(arguments, "settings", None),
+            manifest=getattr(arguments, "manifest", None),
+        )
+        _resolve_arguments(arguments, settings)
+    except (SettingsError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
     if arguments.command == "validate":
         return _compile_workspace(arguments)
     if arguments.command == "inspect":
@@ -48,6 +77,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _build_artifact(arguments)
     if arguments.command == "publish":
         return _publish_artifact(arguments)
+    if arguments.command == "catalog" and arguments.catalog_command == "update":
+        return _update_catalog(arguments)
     parser.error("a command is required")
     return 2
 
@@ -74,11 +105,17 @@ def _parser() -> argparse.ArgumentParser:
         ("build", "Build and write a portable OCI plugin archive without publishing it."),
     ):
         compile_command = commands.add_parser(command, help=help_text)
-        compile_command.add_argument("manifest", type=Path, help="Path to plugin.yaml.")
+        compile_command.add_argument(
+            "manifest",
+            type=Path,
+            nargs="?",
+            help="Path to plugin.yaml; may be supplied by settings.",
+        )
+        _add_settings_argument(compile_command)
         compile_command.add_argument(
             "--image-binding",
             action="append",
-            default=[],
+            default=None,
             metavar="ID=REPOSITORY@sha256:DIGEST",
             help="Immutable custom-workload image binding; repeat for each logical image ID.",
         )
@@ -87,32 +124,279 @@ def _parser() -> argparse.ArgumentParser:
         )
         if command == "build":
             compile_command.add_argument(
-                "--output", type=Path, required=True, help="New OCI-layout .oci.tar output file."
+                "--output", type=Path, help="New OCI-layout .oci.tar output file."
+            )
+            compile_command.add_argument(
+                "--with-workload",
+                action="store_true",
+                help="Build and push the configured custom-workload image through Podman.",
+            )
+            compile_command.add_argument(
+                "--publish",
+                action="store_true",
+                help="Publish the newly written metadata archive after building it.",
+            )
+            compile_command.add_argument(
+                "--workload-engine", help="Container engine for --with-workload (Podman only)."
+            )
+            compile_command.add_argument(
+                "--workload-context", type=Path, help="Container build context for --with-workload."
+            )
+            compile_command.add_argument(
+                "--workload-containerfile",
+                type=Path,
+                help="Containerfile path for --with-workload.",
+            )
+            compile_command.add_argument(
+                "--workload-repository",
+                help="Full workload-image repository for --with-workload; overrides registry.workloadRepository.",
+            )
+            compile_command.add_argument(
+                "--workload-tag", help="Workload-image tag to build and push."
+            )
+            compile_command.add_argument(
+                "--workload-platform", help="Explicit target platform, for example linux/amd64."
+            )
+            compile_command.add_argument(
+                "--workload-image-id",
+                help="Logical manifest workload ID to bind to the pushed image digest.",
+            )
+            _add_publication_arguments(compile_command)
+            compile_command.add_argument(
+                "--verbose",
+                action="store_true",
+                help="Show Podman command lines and delegated build output.",
             )
 
     publish = commands.add_parser(
         "publish",
         help="Publish one prebuilt OCI plugin archive to an explicit repository.",
     )
-    publish.add_argument("artifact", type=Path, help="OCI-layout .oci.tar file produced by build.")
     publish.add_argument(
-        "--registry-origin", required=True, help="Registry origin, including scheme."
+        "artifact", type=Path, nargs="?", help="OCI-layout .oci.tar file produced by build."
     )
-    publish.add_argument("--repository", required=True, help="Destination OCI repository path.")
-    publish.add_argument("--channel", required=True, help="Destination OCI tag.")
-    publish.add_argument("--username", required=True, help="Registry username.")
+    _add_settings_argument(publish)
+    _add_publication_arguments(publish)
     publish.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show concise publication phase information.",
+    )
+    publish.add_argument("--json", action="store_true", help="Print machine-readable output.")
+
+    catalog = commands.add_parser(
+        "catalog",
+        help="Build and publish the next immutable catalog index from a published plugin artifact.",
+    )
+    catalog_commands = catalog.add_subparsers(dest="catalog_command", required=True)
+    update = catalog_commands.add_parser(
+        "update",
+        help="Append a released plugin artifact to a catalog index, creating the first index if absent.",
+    )
+    update.add_argument(
+        "artifact", type=Path, nargs="?", help="Published OCI-layout .oci.tar plugin artifact."
+    )
+    _add_settings_argument(update)
+    update.add_argument(
+        "--catalog-source-id", help="Catalog source ID; overrides catalog.sourceId."
+    )
+    update.add_argument(
+        "--catalog-repository",
+        help="Catalog OCI repository path; overrides registry.catalogRepository.",
+    )
+    update.add_argument(
+        "--catalog-channel", help="Catalog OCI tag; overrides catalog.channel."
+    )
+    update.add_argument(
+        "--expires-in-hours",
+        type=int,
+        help="Catalog validity period; overrides catalog.expiresInHours.",
+    )
+    update.add_argument(
+        "--expected-index-digest",
+        help="Optional current stable manifest digest to reject a stale release coordinator.",
+    )
+    update.add_argument("--registry-origin", help="Registry origin, including scheme; overrides registry.origin.")
+    update.add_argument("--username", help="Registry username; overrides registry.username.")
+    update.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Read the registry password from standard input; required for catalog update.",
+    )
+    update.add_argument(
+        "--allow-insecure-loopback-http",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Allow HTTP only for localhost or 127.0.0.1 developer registries; overrides registry.allowInsecureLoopbackHttp.",
+    )
+    update.add_argument("--verbose", action="store_true", help="Show concise catalog phases.")
+    update.add_argument("--json", action="store_true", help="Print machine-readable output.")
+    return parser
+
+
+def _add_settings_argument(command: argparse.ArgumentParser) -> None:
+    command.add_argument(
+        "--settings",
+        type=Path,
+        help=(
+            "Versioned non-secret settings file; otherwise discover "
+            f"{SETTINGS_FILENAME}."
+        ),
+    )
+
+
+def _add_publication_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--registry-origin", help="Registry origin, including scheme; overrides registry.origin.")
+    command.add_argument(
+        "--repository",
+        help="Metadata OCI repository path; overrides registry.artifactRepository.",
+    )
+    command.add_argument("--channel", help="Destination OCI tag.")
+    command.add_argument("--username", help="Registry username; overrides registry.username.")
+    command.add_argument(
         "--password-stdin",
         action="store_true",
         help="Read the registry password from standard input; required for publication.",
     )
-    publish.add_argument(
+    command.add_argument(
         "--allow-insecure-loopback-http",
-        action="store_true",
-        help="Allow HTTP only for localhost or 127.0.0.1 developer registries.",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Allow HTTP only for localhost or 127.0.0.1 developer registries; overrides registry.allowInsecureLoopbackHttp.",
     )
-    publish.add_argument("--json", action="store_true", help="Print machine-readable output.")
-    return parser
+
+
+def _resolve_arguments(arguments: argparse.Namespace, settings: PluginBuildSettings) -> None:
+    """Apply the documented command-line-over-settings precedence once."""
+
+    if arguments.command in {"validate", "inspect", "build"}:
+        arguments.manifest = _required_path(
+            arguments.manifest or settings.manifest,
+            "plugin manifest",
+        )
+        explicit_bindings = _parse_image_bindings(arguments.image_binding or ())
+        arguments.image_bindings = {**settings.build.image_bindings, **explicit_bindings}
+    if arguments.command == "publish":
+        arguments.artifact = _required_path(
+            arguments.artifact or settings.publish.artifact, "artifact"
+        )
+
+    if arguments.command in {"build", "publish"}:
+        publish = settings.publish
+        registry = settings.registry
+        arguments.registry_origin = arguments.registry_origin or registry.origin
+        arguments.artifact_repository = registry.artifact_repository
+        arguments.repository = arguments.repository or registry.artifact_repository
+        arguments.channel = arguments.channel or publish.channel
+        arguments.username = arguments.username or registry.username
+        arguments.allow_insecure_loopback_http = _boolean_option(
+            arguments.allow_insecure_loopback_http,
+            registry.allow_insecure_loopback_http,
+            default=False,
+        )
+    if arguments.command == "catalog" and arguments.catalog_command == "update":
+        catalog = settings.catalog
+        registry = settings.registry
+        arguments.artifact = _required_path(
+            arguments.artifact or settings.publish.artifact or settings.build.artifact_output,
+            "published plugin artifact",
+        )
+        arguments.registry_origin = arguments.registry_origin or registry.origin
+        arguments.artifact_repository = registry.artifact_repository
+        arguments.catalog_repository = arguments.catalog_repository or registry.catalog_repository
+        arguments.catalog_channel = arguments.catalog_channel or catalog.channel
+        arguments.catalog_source_id = arguments.catalog_source_id or catalog.source_id
+        arguments.expires_in_hours = arguments.expires_in_hours or catalog.expires_in_hours
+        arguments.username = arguments.username or registry.username
+        arguments.allow_insecure_loopback_http = _boolean_option(
+            arguments.allow_insecure_loopback_http,
+            registry.allow_insecure_loopback_http,
+            default=False,
+        )
+        if arguments.expires_in_hours is not None and arguments.expires_in_hours <= 0:
+            raise SettingsError("--expires-in-hours must be a positive integer")
+    if arguments.command == "build":
+        arguments.output = _required_path(
+            arguments.output or settings.build.artifact_output,
+            "metadata artifact output",
+        )
+        arguments.workload_settings = _resolve_workload_settings(
+            arguments,
+            settings.build,
+            registry=settings.registry,
+        )
+
+
+def _resolve_workload_settings(
+    arguments: argparse.Namespace, build: BuildSettings, *, registry: RegistrySettings
+) -> WorkloadBuildSettings | None:
+    configured = build.workload
+    if not arguments.with_workload:
+        if any(
+            value is not None
+            for value in (
+                arguments.workload_engine,
+                arguments.workload_context,
+                arguments.workload_containerfile,
+                arguments.workload_repository,
+                arguments.workload_tag,
+                arguments.workload_platform,
+                arguments.workload_image_id,
+            )
+        ):
+            raise SettingsError("--workload-* options require --with-workload")
+        return configured
+    return WorkloadBuildSettings(
+        engine=arguments.workload_engine or (configured.engine if configured else None),
+        context=arguments.workload_context or (configured.context if configured else None),
+        containerfile=arguments.workload_containerfile
+        or (configured.containerfile if configured else None),
+        repository=arguments.workload_repository
+        or _registry_workload_reference(arguments.registry_origin, registry.workload_repository),
+        tag=arguments.workload_tag or (configured.tag if configured else None),
+        platform=arguments.workload_platform or (configured.platform if configured else None),
+        image_id=arguments.workload_image_id or (configured.image_id if configured else None),
+    )
+
+
+def _registry_workload_reference(origin: str | None, repository: str | None) -> str | None:
+    """Turn a settings repository path into Podman's full pull/push reference."""
+
+    if repository is None:
+        return None
+    if origin is None:
+        raise SettingsError(
+            "registry.origin is required when settings provide registry.workloadRepository"
+        )
+    parsed = urlparse(origin)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+    ):
+        raise SettingsError("registry.origin must be an absolute registry origin")
+    if repository.startswith("/") or "://" in repository:
+        raise SettingsError("registry.workloadRepository must be a repository path, not an origin")
+    return f"{parsed.netloc}/{repository}"
+
+
+def _required_path(value: Path | None, label: str) -> Path:
+    if value is None:
+        raise SettingsError(f"{label} must be supplied on the command line or in settings")
+    return value.expanduser()
+
+
+def _boolean_option(command_line: bool | None, settings: bool | None, *, default: bool) -> bool:
+    if command_line is not None:
+        return command_line
+    if settings is not None:
+        return settings
+    return default
 
 
 def _init_workspace(arguments: argparse.Namespace) -> int:
@@ -143,6 +427,7 @@ def _init_workspace(arguments: argparse.Namespace) -> int:
             _plugin_template(arguments.namespace, name, arguments.version, action_path),
             encoding="utf-8",
         )
+        (directory / SETTINGS_FILENAME).write_text(_settings_template(name), encoding="utf-8")
         (directory / action_path).write_text(
             _action_template(arguments.action, input_path), encoding="utf-8"
         )
@@ -155,7 +440,8 @@ def _init_workspace(arguments: argparse.Namespace) -> int:
         return 1
 
     print(f"Created {directory / 'plugin.yaml'}")
-    print(f"Next: syntara-plugin validate {directory / 'plugin.yaml'}")
+    print(f"Created {directory / SETTINGS_FILENAME}")
+    print(f"Next: cd {directory} && syntara-plugin validate --settings {SETTINGS_FILENAME}")
     return 0
 
 
@@ -164,8 +450,8 @@ def _compile_workspace(arguments: argparse.Namespace) -> int:
     try:
         result = compile_workspace(
             BuildRequest(
-                arguments.manifest.expanduser(),
-                image_bindings=_parse_image_bindings(arguments.image_binding),
+                arguments.manifest,
+                image_bindings=arguments.image_bindings,
             )
         )
     except CompilationError as error:
@@ -200,21 +486,57 @@ def _compile_workspace(arguments: argparse.Namespace) -> int:
 
 
 def _build_artifact(arguments: argparse.Namespace) -> int:
-    """Build a source workspace into one reviewable, portable OCI archive."""
+    """Build an archive, optionally bind one Podman workload image, then publish it."""
     try:
+        image_bindings = dict(arguments.image_bindings)
+        workload_image: str | None = None
+        workload_request: WorkloadBuildRequest | None = None
+        if arguments.with_workload:
+            workload_request, image_id = _workload_request(
+                arguments.workload_settings,
+                allow_insecure_loopback_http=arguments.allow_insecure_loopback_http,
+            )
+            _phase(arguments, "Building and pushing the custom workload image")
+            workload_image = build_and_push_workload(workload_request, verbose=arguments.verbose)
+            image_bindings[image_id] = workload_image
         result = compile_workspace(
             BuildRequest(
-                arguments.manifest.expanduser(),
-                image_bindings=_parse_image_bindings(arguments.image_binding),
+                arguments.manifest,
+                image_bindings=image_bindings,
             )
         )
         artifact = build_plugin_artifact(result)
         output = write_plugin_artifact_archive(artifact, arguments.output)
-    except (ArtifactArchiveError, ArtifactBuildError, CompilationError, ValueError) as error:
+    except SettingsError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    except (
+        ArtifactArchiveError,
+        ArtifactBuildError,
+        CompilationError,
+        ValueError,
+        WorkloadBuildError,
+    ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
     payload = {**_artifact_payload(result.digest, artifact), "archive": str(output)}
+    if workload_image is not None:
+        payload["workloadImage"] = workload_image
+        assert workload_request is not None
+        payload["workloadPlatform"] = workload_request.platform
+        payload["workloadRepository"] = workload_request.repository
+    if arguments.publish:
+        try:
+            _phase(arguments, "Publishing the metadata artifact")
+            payload["publication"] = _publish_archive(arguments, output)
+        except SettingsError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        except (ArtifactArchiveError, CatalogIndexPublicationError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        payload["ok"] = True
     if arguments.json:
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     else:
@@ -229,29 +551,25 @@ def _build_artifact(arguments: argparse.Namespace) -> int:
             print(
                 f"  {name}: {descriptor.digest} ({descriptor.media_type}, {descriptor.size} bytes)"
             )
+        if workload_image is not None:
+            print(f"Workload image: {workload_image}")
+            print(f"Workload platform: {workload_request.platform}")
+        if arguments.publish:
+            publication = payload["publication"]
+            assert isinstance(publication, dict)
+            print(f"Published: {publication['immutableReference']}")
+            print(f"Channel: {publication['repository']}:{publication['channel']}")
     return 0
 
 
 def _publish_artifact(arguments: argparse.Namespace) -> int:
     """Publish exactly one verified portable archive to an explicit destination."""
-    if not arguments.password_stdin:
-        print("error: publish requires --password-stdin", file=sys.stderr)
-        return 2
-    password = sys.stdin.read().rstrip("\r\n")
-    if not password:
-        print("error: --password-stdin received no password", file=sys.stderr)
-        return 2
     try:
-        artifact = read_plugin_artifact_archive(arguments.artifact)
-        publication = PluginArtifactPublisher(
-            PluginArtifactPublicationTarget(
-                registry_origin=arguments.registry_origin,
-                repository=arguments.repository,
-                channel=arguments.channel,
-                allow_insecure_loopback_http=arguments.allow_insecure_loopback_http,
-            ),
-            credentials=RegistryCredentials(arguments.username, password),
-        ).publish(artifact)
+        _phase(arguments, "Publishing the metadata artifact")
+        payload = _publish_archive(arguments, arguments.artifact)
+    except SettingsError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
     except (
         ArtifactArchiveError,
         CatalogIndexPublicationError,
@@ -260,20 +578,281 @@ def _publish_artifact(arguments: argparse.Namespace) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
-    payload = {
+    if arguments.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"Published: {payload['immutableReference']}")
+        print(f"Channel: {payload['repository']}:{payload['channel']}")
+    return 0
+
+
+def _update_catalog(arguments: argparse.Namespace) -> int:
+    """Advance one catalog channel from an already-published plugin archive.
+
+    This is deliberately a separate release operation from plugin publication:
+    the catalog is a shared channel and may have its own review, signature, and
+    single-writer CI policy.
+    """
+
+    try:
+        password = _publication_password(arguments, operation="catalog update")
+        missing = [
+            label
+            for label, value in (
+                ("registry origin", arguments.registry_origin),
+                ("catalog repository", arguments.catalog_repository),
+                ("catalog channel", arguments.catalog_channel),
+                ("catalog source ID", arguments.catalog_source_id),
+                ("catalog expiry", arguments.expires_in_hours),
+                ("username", arguments.username),
+            )
+            if value is None or value == ""
+        ]
+        if missing:
+            raise SettingsError("catalog update requires: " + ", ".join(missing))
+        artifact = read_plugin_artifact_archive(arguments.artifact)
+        entry = _catalog_entry(artifact, _required_catalog_artifact_repository(arguments))
+        publisher = CatalogIndexPublisher(
+            CatalogIndexPublicationTarget(
+                registry_origin=arguments.registry_origin,
+                repository=arguments.catalog_repository,
+                channel=arguments.catalog_channel,
+                allow_insecure_loopback_http=arguments.allow_insecure_loopback_http,
+            ),
+            credentials=RegistryCredentials(arguments.username, password),
+        )
+        _phase(arguments, "Reading the current catalog index")
+        current = publisher.read_current()
+        if arguments.expected_index_digest is not None:
+            actual_digest = current.manifest_digest if current is not None else None
+            if actual_digest != arguments.expected_index_digest:
+                raise SettingsError(
+                    "current catalog digest does not match --expected-index-digest"
+                )
+        now = datetime.now(UTC)
+        document, idempotent = merge_catalog_entry(
+            current=current.document if current is not None else None,
+            current_manifest_digest=current.manifest_digest if current is not None else None,
+            entry=entry,
+            source_id=arguments.catalog_source_id,
+            issued_at=now,
+            expires_at=now + timedelta(hours=arguments.expires_in_hours),
+        )
+        metadata = _mapping(document["metadata"], "catalog metadata")
+        if idempotent:
+            assert current is not None
+            payload = {
+                "catalogIndexDigest": current.manifest_digest,
+                "channel": arguments.catalog_channel,
+                "entry": entry,
+                "generation": metadata["generation"],
+                "idempotent": True,
+                "immutableReference": f"{arguments.catalog_repository}@{current.manifest_digest}",
+                "ok": True,
+                "repository": arguments.catalog_repository,
+            }
+        else:
+            index_artifact = build_catalog_index_artifact(document)
+            _phase(arguments, "Publishing the catalog index")
+            publication = publisher.publish(index_artifact)
+            payload = {
+                "catalogIndexDigest": publication.manifest_digest,
+                "channel": publication.channel,
+                "entry": entry,
+                "generation": metadata["generation"],
+                "idempotent": False,
+                "immutableReference": publication.immutable_reference,
+                "ok": True,
+                "previousIndexDigest": (
+                    current.manifest_digest if current is not None else None
+                ),
+                "repository": publication.repository,
+            }
+    except SettingsError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    except (
+        ArtifactArchiveError,
+        CatalogIndexArtifactBuildError,
+        CatalogIndexPublicationError,
+        CatalogIndexUpdateError,
+        ValueError,
+    ) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    if arguments.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"Catalog index: {payload['immutableReference']}")
+        print(f"Channel: {payload['repository']}:{payload['channel']}")
+        print(f"Generation: {payload['generation']}")
+        print(f"Entry: {entry['namespace']}/{entry['name']}:{entry['version']}")
+        if payload["idempotent"]:
+            print("No publication: the exact release is already in the catalog.")
+    return 0
+
+
+def _catalog_entry(artifact: PluginArtifact, artifact_repository: str) -> dict[str, str]:
+    """Derive one catalog entry only from the verified signed plugin descriptor."""
+
+    try:
+        descriptor = json.loads(artifact.plugin_manifest.content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("plugin artifact descriptor is not valid UTF-8 JSON") from error
+    descriptor_mapping = _mapping(descriptor, "plugin artifact descriptor")
+    metadata = _mapping(descriptor_mapping.get("metadata"), "plugin artifact metadata")
+    specification = _mapping(descriptor_mapping.get("spec"), "plugin artifact spec")
+    documentation = _mapping(specification.get("documentation"), "plugin artifact documentation")
+    namespace = _required_string(metadata.get("namespace"), "plugin artifact metadata.namespace")
+    name = _required_string(metadata.get("name"), "plugin artifact metadata.name")
+    version = _required_string(metadata.get("version"), "plugin artifact metadata.version")
+    documentation_digest = _required_string(
+        documentation.get("digest"), "plugin artifact documentation.digest"
+    )
+    targets = specification.get("targets")
+    if not isinstance(targets, list) or not targets:
+        raise ValueError("plugin artifact spec.targets must be a non-empty array")
+    ownerships: set[str] = set()
+    for index, target in enumerate(targets):
+        target_mapping = _mapping(target, f"plugin artifact target {index}")
+        runtime = _mapping(target_mapping.get("runtime"), f"plugin artifact target {index} runtime")
+        kind = _required_string(runtime.get("kind"), f"plugin artifact target {index} runtime.kind")
+        if kind not in {"platform-runner", "custom-workload"}:
+            raise ValueError(f"unsupported plugin runtime kind for catalog: {kind!r}")
+        ownerships.add(kind)
+    if len(ownerships) != 1:
+        raise ValueError(
+            "a catalog entry requires one runtime ownership; split mixed-runtime actions into separate plugins"
+        )
+    return {
+        "namespace": namespace,
+        "name": name,
+        "version": version,
+        "artifactRepository": artifact_repository,
+        "artifactDigest": artifact.digest,
+        "documentationDigest": documentation_digest,
+        "runtimeOwnership": ownerships.pop(),
+    }
+
+
+def _required_catalog_artifact_repository(arguments: argparse.Namespace) -> str:
+    repository = getattr(arguments, "artifact_repository", None)
+    if not repository:
+        raise SettingsError(
+            "catalog update requires registry.artifactRepository in settings; "
+            "it is the repository that holds the published plugin artifact"
+        )
+    return repository
+
+
+def _publication_password(arguments: argparse.Namespace, *, operation: str) -> str:
+    """Read one short-lived registry credential without persisting it."""
+
+    if not arguments.password_stdin:
+        raise SettingsError(f"{operation} requires --password-stdin")
+    password = sys.stdin.read().rstrip("\r\n")
+    if not password:
+        raise SettingsError("--password-stdin received no password")
+    return password
+
+
+def _mapping(value: object, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    return value
+
+
+def _required_string(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{label} must be a non-empty string")
+    return value
+
+
+def _workload_request(
+    settings: WorkloadBuildSettings | None, *, allow_insecure_loopback_http: bool
+) -> tuple[WorkloadBuildRequest, str]:
+    """Turn selected non-secret CLI settings into one complete Podman request."""
+
+    if settings is None:
+        raise SettingsError("--with-workload requires workload settings")
+    missing = [
+        label
+        for label, value in (
+            ("engine", settings.engine),
+            ("context", settings.context),
+            ("containerfile", settings.containerfile),
+            ("repository", settings.repository),
+            ("tag", settings.tag),
+            ("platform", settings.platform),
+            ("imageId", settings.image_id),
+        )
+        if value is None
+    ]
+    if missing:
+        raise SettingsError("--with-workload requires: " + ", ".join(missing))
+    assert settings.context is not None
+    assert settings.containerfile is not None
+    assert settings.engine is not None
+    assert settings.repository is not None
+    assert settings.tag is not None
+    assert settings.platform is not None
+    assert settings.image_id is not None
+    return (
+        WorkloadBuildRequest(
+            engine=settings.engine,
+            context=settings.context.expanduser(),
+            containerfile=settings.containerfile.expanduser(),
+            repository=settings.repository,
+            tag=settings.tag,
+            platform=settings.platform,
+            allow_insecure_loopback_http=allow_insecure_loopback_http,
+        ),
+        settings.image_id,
+    )
+
+
+def _publish_archive(arguments: argparse.Namespace, archive: Path) -> dict[str, object]:
+    """Verify and publish a portable archive using already-resolved coordinates."""
+
+    password = _publication_password(arguments, operation="publish")
+    missing = [
+        label
+        for label, value in (
+            ("registry origin", arguments.registry_origin),
+            ("repository", arguments.repository),
+            ("channel", arguments.channel),
+            ("username", arguments.username),
+        )
+        if not value
+    ]
+    if missing:
+        raise SettingsError("publish requires: " + ", ".join(missing))
+    artifact = read_plugin_artifact_archive(archive)
+    publication = PluginArtifactPublisher(
+        PluginArtifactPublicationTarget(
+            registry_origin=arguments.registry_origin,
+            repository=arguments.repository,
+            channel=arguments.channel,
+            allow_insecure_loopback_http=arguments.allow_insecure_loopback_http,
+        ),
+        credentials=RegistryCredentials(arguments.username, password),
+    ).publish(artifact)
+    return {
         **_artifact_payload(artifact.plugin_manifest.descriptor.digest, artifact),
-        "archive": str(arguments.artifact),
+        "archive": str(archive),
         "channel": publication.channel,
         "immutableReference": publication.immutable_reference,
         "ok": True,
         "repository": publication.repository,
     }
-    if arguments.json:
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    else:
-        print(f"Published: {publication.immutable_reference}")
-        print(f"Channel: {publication.repository}:{publication.channel}")
-    return 0
+
+
+def _phase(arguments: argparse.Namespace, message: str) -> None:
+    """Keep structured stdout clean while exposing meaningful verbose phases."""
+
+    if getattr(arguments, "verbose", False):
+        print(f"==> {message}", file=sys.stderr)
 
 
 def _inspect(arguments: argparse.Namespace) -> int:
@@ -347,6 +926,18 @@ def _plugin_template(namespace: str, name: str, version: str, action_path: Path)
         "    path: docs/README.md\n"
         "  targets:\n"
         f"    - {action_path.as_posix()}\n"
+    )
+
+
+def _settings_template(name: str) -> str:
+    """Return plugin-root settings without duplicating manifest target selection."""
+
+    return (
+        "apiVersion: syntara.io/v1alpha1\n"
+        "kind: PluginBuildSettings\n"
+        "manifest: plugin.yaml\n"
+        "build:\n"
+        f"  artifactOutput: dist/{name}.oci.tar\n"
     )
 
 

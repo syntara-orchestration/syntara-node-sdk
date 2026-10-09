@@ -222,6 +222,7 @@ def test_compiler_canonicalizes_connection_types_and_binds_an_action_to_them() -
     assert integration["configuration"] == {"type": "object"}
     assert credential["kind"] == "CredentialRecipe"
     assert credential["credentialSchema"]["required"] == ["token"]
+    assert "output" not in credential
     assert compiled_action["integrationType"] == "acme.issue-tools.github-connection"
 
 
@@ -459,6 +460,20 @@ def test_rejects_duplicate_yaml_keys_recursive_alias_and_mutable_image(tmp_path:
         )
     assert "IMAGE_REFERENCE_MUTABLE" in {
         diagnostic.code for diagnostic in image_error.value.diagnostics
+    }
+
+
+def test_custom_workload_accepts_digest_pinned_registry_reference_with_port(tmp_path: Path) -> None:
+    """A local OCI registry port is part of an immutable repository reference."""
+    root = _workspace(
+        tmp_path, action=_action({"kind": "inline", "value": {"type": "object"}})
+    )
+    image = "localhost:8443/syntara-admin/plugins/echo@sha256:" + "a" * 64
+
+    result = compile_workspace(BuildRequest(root, image_bindings={"plugin-workload": image}))
+
+    assert result.descriptor["spec"]["workloads"] == {
+        "plugin-workload": {"abi": "syntara.container/v1alpha1", "image": image}
     }
 
 

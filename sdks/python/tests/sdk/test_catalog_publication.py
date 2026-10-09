@@ -195,6 +195,49 @@ def test_publisher_uploads_immutable_blobs_before_advancing_the_configured_chann
     }
 
 
+def test_publisher_reads_and_verifies_the_current_catalog_channel() -> None:
+    artifact = _artifact()
+    transport = _Transport(
+        [
+            OciRegistryResponse(
+                200,
+                {"Docker-Content-Digest": artifact.digest},
+                artifact.manifest.content,
+            ),
+            OciRegistryResponse(200, {}, artifact.config.content),
+            OciRegistryResponse(200, {}, artifact.catalog_index.content),
+        ]
+    )
+
+    snapshot = CatalogIndexPublisher(_target(), transport=transport).read_current()
+
+    assert snapshot is not None
+    assert snapshot.manifest_digest == artifact.digest
+    assert snapshot.document["metadata"]["generation"] == 1
+    assert [request[0] for request in transport.requests] == ["GET", "GET", "GET"]
+    assert transport.requests[0][1].endswith("/manifests/stable")
+    assert transport.requests[1][1].endswith(f"/blobs/{artifact.config.descriptor.digest}")
+    assert transport.requests[2][1].endswith(
+        f"/blobs/{artifact.catalog_index.descriptor.digest}"
+    )
+
+
+def test_publisher_rejects_current_catalog_with_unverified_manifest_digest() -> None:
+    artifact = _artifact()
+    transport = _Transport(
+        [
+            OciRegistryResponse(
+                200,
+                {"Docker-Content-Digest": "sha256:" + "0" * 64},
+                artifact.manifest.content,
+            )
+        ]
+    )
+
+    with pytest.raises(CatalogIndexPublicationError, match="CATALOG_INDEX_MANIFEST_DIGEST_INVALID"):
+        CatalogIndexPublisher(_target(), transport=transport).read_current()
+
+
 def test_publisher_rejects_registry_attempts_to_redirect_an_upload_off_origin() -> None:
     artifact = _artifact()
     transport = _Transport(
