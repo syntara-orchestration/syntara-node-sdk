@@ -1,0 +1,14 @@
+{
+  "apiVersion": "syntara.io/v1alpha1",
+  "kind": "Plugin",
+  "metadata": {
+    "namespace": "acme",
+    "name": "github-tools",
+    "version": "0.1.0",
+    "displayName": "GitHub tools",
+    "description": "Creates GitHub issues."
+  },
+  "spec": {
+    "targets": ["actions/create-issue.yaml", "triggers/pull-request.yaml"]
+  }
+}

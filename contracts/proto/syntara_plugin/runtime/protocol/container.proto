@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package syntara.container.v1alpha1;
+
+// The container ABI is the application-data channel between the Execution
+// Plane and a plugin workload. It deliberately carries action identity and
+// bounded JSON objects, never a container command or plaintext credential.
+service ContainerService {
+  rpc Execute(ExecuteRequest) returns (stream ExecutionEvent);
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message ExecuteRequest {
+  string invocation_id = 1;
+  string step_revision_id = 2;
+  string runtime_abi = 3;
+  bytes inputs_json = 4;
+  // A JSON object mapping approved credential names to temporary in-container
+  // file paths. Secret values never travel through this protocol.
+  bytes credential_file_paths_json = 5;
+  uint32 timeout_seconds = 6;
+  // A bounded, non-secret runner-specific context selected by Syntara from the
+  // installed immutable action. It never contains an endpoint or credential.
+  bytes runtime_context_json = 7;
+}
+
+message Progress {
+  uint32 sequence = 1;
+  string state = 2;
+  string message = 3;
+  double percent = 4;
+  bool has_percent = 5;
+}
+
+message Result {
+  string output_schema_digest = 1;
+  bytes output_json = 2;
+  string object_reference = 3;
+}
+
+message Failure {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+  string outcome = 4;
+  string correlation_id = 5;
+  string provider_code = 6;
+}
+
+message ExecutionEvent {
+  string invocation_id = 1;
+  oneof event {
+    Progress progress = 2;
+    Result result = 3;
+    Failure failure = 4;
+  }
+}
+
+message CancelRequest { string invocation_id = 1; }
+message CancelResponse { bool accepted = 1; }
+message HealthRequest {}
+message HealthResponse {
+  bool ready = 1;
+  string runtime_abi = 2;
+  repeated string step_revision_ids = 3;
+}

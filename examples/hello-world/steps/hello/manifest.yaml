@@ -1,0 +1,31 @@
+apiVersion: syntara.io/v1alpha1
+kind: Action
+metadata:
+  name: hello
+  displayName: Say hello
+  description: Returns a greeting through Syntara's managed HTTP runner.
+spec:
+  runtime:
+    kind: platform-runner
+    driver: http.v1
+    operation:
+      method: GET
+      path: /hello/{input.name}
+  input:
+    kind: asset
+    path: schemas/hello.input.yaml
+  output:
+    kind: inline
+    value:
+      type: object
+      additionalProperties: false
+      required:
+        - message
+      properties:
+        message:
+          type: string
+  error:
+    kind: inline
+    value:
+      type: object
+      additionalProperties: false

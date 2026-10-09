@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/integration.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "syntara.io/v1alpha1"},
+    "kind": {"const": "IntegrationType"},
+    "metadata": {"$ref": "common.schema.json#/$defs/targetMetadata"},
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "endpointKinds", "credentialTypes", "configuration"],
+      "properties": {
+        "id": {"$ref": "common.schema.json#/$defs/qualifiedIdentifier"},
+        "endpointKinds": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/identifier"}},
+        "credentialTypes": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/qualifiedIdentifier"}},
+        "configuration": {"$ref": "common.schema.json#/$defs/documentSource"}
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "apiVersion": "syntara.io/v1alpha1",
+  "kind": "TriggerEventMapping",
+  "metadata": {"name": "github-pull-request", "displayName": "GitHub pull request", "description": "Maps GitHub pull request events."},
+  "spec": {
+    "driver": "webhook.v1",
+    "event": "pull-request.opened",
+    "configuration": {"kind": "inline", "value": {"type": "object", "properties": {"repository": {"type": "string"}}}},
+    "output": {"kind": "inline", "value": {"type": "object", "properties": {"number": {"type": "integer"}}}}
+  }
+}

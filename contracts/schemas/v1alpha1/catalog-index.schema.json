@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.syntara.io/v1alpha1/catalog-index.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "syntara.io/v1alpha1"},
+    "kind": {"const": "CatalogIndex"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId", "generation", "issuedAt", "expiresAt"],
+      "properties": {
+        "sourceId": {"$ref": "common.schema.json#/$defs/identifier"},
+        "generation": {"type": "integer", "minimum": 1},
+        "issuedAt": {"$ref": "common.schema.json#/$defs/rfc3339Timestamp"},
+        "expiresAt": {"$ref": "common.schema.json#/$defs/rfc3339Timestamp"},
+        "previousIndexDigest": {"$ref": "common.schema.json#/$defs/sha256Digest"}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "entries"],
+      "properties": {
+        "contractVersion": {"type": "string", "pattern": "^syntara\\.io/v[0-9]+(?:alpha|beta)?[0-9]+$"},
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["namespace", "name", "version", "artifactRepository", "artifactDigest", "documentationDigest", "runtimeOwnership"],
+            "properties": {
+              "namespace": {"$ref": "common.schema.json#/$defs/identifier"},
+              "name": {"$ref": "common.schema.json#/$defs/identifier"},
+              "version": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"},
+              "artifactRepository": {"$ref": "common.schema.json#/$defs/repository"},
+              "artifactDigest": {"$ref": "common.schema.json#/$defs/sha256Digest"},
+              "documentationDigest": {"$ref": "common.schema.json#/$defs/sha256Digest"},
+              "runtimeOwnership": {"enum": ["platform-runner", "custom-workload"]},
+              "deprecated": {"type": "boolean"},
+              "withdrawn": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

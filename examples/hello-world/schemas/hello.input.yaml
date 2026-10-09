@@ -1,0 +1,9 @@
+type: object
+additionalProperties: false
+required:
+  - name
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: Name to include in the greeting.
